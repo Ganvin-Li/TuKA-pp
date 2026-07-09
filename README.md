@@ -1,11 +1,12 @@
 <div align="center">
+
 # TuKA++: Multi-Factor Lifelong Embodied Navigation Learning with Tucker Adaptation
 
 <img src="docs/static/F1.png" width="100%">
 
+</div>
+
 ---
-
-
 
 ## Overview
 
