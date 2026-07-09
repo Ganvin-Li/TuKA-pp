@@ -5,6 +5,8 @@
 
 ---
 
+
+
 ## Overview
 
 Real-world embodied navigation is governed by **multiple coupled factors** — the physical **scene**, the environmental **condition** (normal / low-light / overexposure / scattering), and the **instruction style** (step-by-step, object-goal, or dialogue). Fine-tuning a navigation agent on one scenario typically causes **catastrophic forgetting** of others, which limits flexible long-term deployment.
@@ -13,6 +15,8 @@ We formalize this as **Multi-Factor Lifelong Embodied Navigation (MFLEN)**: an a
 
 To solve it we propose **Tucker Adaptation++ (TuKA++)**, a high-order tensor adaptation framework that represents multi-factor navigation knowledge with a **Tucker decomposition**, decoupling scene / environment / instruction-style knowledge into factor-specific expert matrices and aligning the high-order tensor with the 2-D LLM weight matrices through tensor contraction. A **Factor-wise Knowledge Inheritance & Exploration** strategy together with a **Progressively Expandable Shared Tucker Subspace with dynamic zero-padding** enables continual learning while **structurally preserving** old-task adapters.
 
+
+
 ## Highlights
 
 - 🧩 **Multi-factor decoupling.** Scene, environment, and instruction-style knowledge are represented as independent factor experts in a 5th-order Tucker tensor, and composed on demand at inference.
@@ -20,6 +24,8 @@ To solve it we propose **Tucker Adaptation++ (TuKA++)**, a high-order tensor ada
 - 🌗 **All-day, multi-scene.** An extended *Allday-Habitat* simulator adds physically-based low-light, overexposure, and atmospheric-scattering degradations.
 - 📊 **MFLEN benchmark.** 40 coupled tasks (30 for lifelong learning, 10 held-out for generalization) spanning VLN / OLN / DUN instruction styles.
 - 🤖 **Real-world deployment.** Closed-loop navigation on a quadruped robot.
+
+
 
 ## Installation
 
@@ -52,6 +58,8 @@ bash scripts/convert_to_vlnce.sh
 bash scripts/collect_trajectories.sh
 ```
 
+
+
 ## Training
 
 Sequential lifelong learning over the 30 trained tasks (each task expands the shared Tucker subspace only when a new factor category appears, then hard-routes + zero-pads to preserve prior adapters):
@@ -59,6 +67,8 @@ Sequential lifelong learning over the 30 trained tasks (each task expands the sh
 ```bash
 bash scripts/streamvln_train_tuka5d.sh
 ```
+
+
 
 ## Evaluation
 
