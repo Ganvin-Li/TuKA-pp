@@ -1,0 +1,928 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TuKA++: Multi-Factor Lifelong Embodied Navigation Learning with Tucker Adaptation</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <script>window.MathJax={tex:{inlineMath:[['$','$'],['\\(','\\)']],displayMath:[['$$','$$'],['\\[','\\]']],processEscapes:true,packages:{'[+]':['base','ams','boldsymbol']}},options:{skipHtmlTags:['script','noscript','style','textarea','pre','code']}};</script>
+  <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js"></script>
+  <style>
+    :root{--ink:#0f172a;--muted:#64748b;--brand:#4f46e5;--brand2:#7c3aed;--soft:#f7f8fc;--line:#e9ecf4;}
+    *{margin:0;padding:0;box-sizing:border-box;}
+    html{scroll-behavior:smooth;}
+    body{font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:var(--ink);background:#fff;line-height:1.7;-webkit-font-smoothing:antialiased;}
+    a{color:var(--brand);text-decoration:none;}
+    a:hover{text-decoration:underline;}
+    ::selection{background:#dfe4ff;color:#0b1020;}
+    .wrap{max-width:1120px;margin:0 auto;padding:0 24px;}
+    .narrow{max-width:820px;margin-left:auto;margin-right:auto;}
+    .hero{text-align:center;padding:58px 0 18px;background:radial-gradient(1200px 460px at 50% -150px,#eef0ff 0%,#fff 72%);}
+    .hero h1{font-size:2.55rem;font-weight:800;line-height:1.16;letter-spacing:-1px;max-width:980px;margin:0 auto 18px;color:#0b1020;}
+    .authors{font-size:1.12rem;line-height:1.65;max-width:1000px;margin:2px auto 12px;}
+    .authors .au{color:#2563eb;font-weight:700;}
+    .authors a.au:hover{text-decoration:underline;}
+    .authors sup{color:#2563eb;font-weight:600;font-size:.66em;}
+    .authors .mem{font-style:italic;font-weight:500;color:#475569;font-size:.82em;}
+    .affils{color:#334155;font-size:.96rem;line-height:1.75;max-width:920px;margin:2px auto;}
+    .affils div{margin:1px 0;}
+    .affils sup{color:#334155;font-weight:700;}
+    .contrib{font-size:.9rem;color:var(--muted);font-style:italic;margin:10px 0 18px;}
+    .contrib sup{font-style:normal;}
+    .btns{display:flex;gap:14px;justify-content:center;flex-wrap:wrap;}
+    .btn{display:inline-flex;align-items:center;gap:9px;padding:12px 26px;border-radius:999px;font-weight:700;font-size:1rem;background:#111827;color:#fff;transition:.2s;}
+    .btn:hover{background:#0b1020;text-decoration:none;transform:translateY(-2px);box-shadow:0 10px 24px rgba(15,23,42,.22);}
+    .btn svg{width:19px;height:19px;fill:currentColor;}
+    .nav{position:sticky;top:0;z-index:60;background:rgba(255,255,255,.9);backdrop-filter:saturate(160%) blur(12px);border-bottom:1px solid var(--line);}
+    .nav .wrap{display:flex;gap:2px;flex-wrap:wrap;justify-content:center;padding:6px 24px;}
+    .nav a{position:relative;padding:11px 16px;font-weight:600;font-size:.94rem;color:#475569;transition:color .15s;}
+    .nav a:hover{color:var(--brand);text-decoration:none;}
+    .nav a::after{content:"";position:absolute;left:16px;right:16px;bottom:6px;height:2px;border-radius:2px;background:linear-gradient(90deg,var(--brand),var(--brand2));transform:scaleX(0);transition:transform .18s ease;}
+    .nav a:hover::after{transform:scaleX(1);}
+    .nav a.active{color:var(--brand);}
+    .nav a.active::after{transform:scaleX(1);}
+    section{padding:46px 0;scroll-margin-top:62px;}
+    #overview{padding-top:26px;padding-bottom:38px;}
+    section.soft{background:var(--soft);border-top:1px solid var(--line);border-bottom:1px solid var(--line);}
+    .h2{font-size:1.9rem;font-weight:800;text-align:center;letter-spacing:-.5px;margin-bottom:6px;}
+    .h2 .u{display:block;width:58px;height:4px;margin:14px auto 0;border-radius:4px;background:linear-gradient(90deg,var(--brand),var(--brand2));}
+    .lead{text-align:center;color:var(--muted);max-width:820px;margin:0 auto 30px;font-size:1.02rem;}
+    .h3{font-size:1.24rem;font-weight:700;margin:36px 0 10px;display:flex;align-items:center;gap:10px;}
+    .h3::before{content:"";width:5px;height:22px;border-radius:3px;background:linear-gradient(180deg,var(--brand),var(--brand2));}
+    .h3 .cnt{color:var(--muted);font-weight:500;font-size:.92rem;}
+    .fig{text-align:center;margin:16px auto;}
+    .fig img{max-width:100%;height:auto;border-radius:14px;border:1px solid var(--line);box-shadow:0 10px 34px rgba(20,20,60,.07);}
+    .cap{color:var(--muted);font-size:.95rem;max-width:960px;margin:12px auto 0;text-align:center;line-height:1.6;}
+    .abstract{font-size:1.05rem;color:#334155;text-align:justify;}
+    .math{color:var(--muted);font-size:.96rem;line-height:1.65;text-align:center;max-width:960px;margin:14px auto;}
+    .grid{display:grid;grid-template-columns:repeat(2,1fr);gap:28px;margin-top:16px;}
+    .vcard{background:#fff;border:1px solid var(--line);border-radius:16px;overflow:hidden;box-shadow:0 4px 18px rgba(20,20,60,.05);transition:transform .2s,box-shadow .2s;display:flex;flex-direction:column;}
+    .vcard:hover{transform:translateY(-6px);box-shadow:0 20px 40px rgba(20,20,60,.13);}
+    .vwrap{position:relative;width:100%;aspect-ratio:16/9;background:linear-gradient(135deg,#0b1020,#1c2350);}
+    .vwrap video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;}
+    .tasktag{position:absolute;top:12px;left:12px;font-weight:800;font-size:.9rem;letter-spacing:.3px;color:#fff;background:linear-gradient(135deg,var(--brand),var(--brand2));padding:5px 13px;border-radius:999px;box-shadow:0 4px 12px rgba(79,70,229,.45);}
+    .speed{position:absolute;top:12px;right:12px;background:rgba(11,16,32,.7);color:#fff;font-size:12px;font-weight:600;padding:3px 9px;border-radius:6px;}
+    .vbody{padding:16px 18px 18px;}
+    .badges{display:flex;gap:7px;flex-wrap:wrap;margin-bottom:10px;}
+    .badge{font-size:11.5px;font-weight:700;padding:4px 11px;border-radius:999px;letter-spacing:.2px;}
+    .type-VLN{background:#e0f2fe;color:#0369a1;}
+    .type-OLN{background:#fce7f3;color:#be185d;}
+    .type-DUN{background:#ede9fe;color:#6d28d9;}
+    .env-normal{background:#dcfce7;color:#15803d;}
+    .env-low{background:#dbeafe;color:#1d4ed8;}
+    .env-scatter{background:#fef3c7;color:#b45309;}
+    .env-over{background:#f3e8ff;color:#7e22ce;}
+    .badge.scene{background:#f1f5f9;color:#334155;font-family:'Inter',monospace;}
+    .instr{color:#334155;font-size:.95rem;line-height:1.55;}
+    .ph{border:2px dashed #cdd4e8;border-radius:14px;padding:44px 20px;color:#8a93a8;text-align:center;font-size:.95rem;background:#fbfcff;}
+    .ph code{background:#eef0ff;color:var(--brand);padding:2px 7px;border-radius:6px;}
+    @media(max-width:760px){.hero h1{font-size:1.75rem;}.authors{font-size:1.05rem;}.grid{grid-template-columns:1fr;}.nav a{font-size:.85rem;padding:7px 11px;}}
+  </style>
+</head>
+<body>
+  <header class="hero">
+    <div class="wrap">
+      <h1>TuKA++: Multi-Factor Lifelong Embodied Navigation Learning with Tucker Adaptation</h1>
+      <div class="authors"><a class="au" href="https://wangxudongsia.github.io" target="_blank" rel="noopener">Xudong Wang</a><sup><strong>*</strong>,1,2,3</sup>, <span class="au">Gan Li</span><sup><strong>*</strong>,1,2</sup>, <span class="au">Zhi Han</span><sup>&dagger;,1</sup>, <span class="au">Chen Gao</span><sup>3,4</sup>, <span class="au">Yue Liao</span><sup>3</sup>, <span class="au">Dongyue Wang</span><sup>1,2</sup>, <span class="au">Zhiyu Liu</span><sup>1,2</sup>, <span class="au">Yao Wang</span><sup>5</sup>, <span class="au">Lianqing Liu</span><sup>1</sup><span class="mem">, Senior Member, IEEE</span>, <span class="au">Si Liu</span><sup>4,6</sup><span class="mem">, Senior Member, IEEE</span>, <span class="au">Shuicheng Yan</span><sup>3</sup><span class="mem">, Fellow, IEEE</span></div>
+      <div class="affils">
+        <div><sup>1</sup> State Key Laboratory of Robotics and Intelligent Systems, Shenyang Institute of Automation, Chinese Academy of Sciences</div>
+        <div><sup>2</sup> University of Chinese Academy of Sciences</div>
+        <div><sup>3</sup> School of Computing, National University of Singapore</div>
+        <div><sup>4</sup> School of Artificial Intelligence, Beihang University</div>
+        <div><sup>5</sup> Center for Intelligent Decision-making and Machine Learning, School of Management, Xi'an Jiaotong University</div>
+        <div><sup>6</sup> Hangzhou Innovation Institute, Beihang University</div>
+      </div>
+      <div class="contrib"><strong><sup>*</sup> Equal contribution. &nbsp; <sup>&dagger;</sup> Corresponding author.</strong></div>
+      <div class="btns">
+        <a class="btn" href="#" target="_blank">
+          <svg viewBox="0 0 24 24"><path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z"/></svg>
+          Paper (Coming Soon)
+        </a>
+        
+        <a class="btn" href="https://github.com/Ganvin-Li/TuKA-pp" target="_blank">
+          <svg viewBox="0 0 16 16"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.012 8.012 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
+          Code
+        </a>
+      </div>
+    </div>
+  </header>
+  <nav class="nav">
+    <div class="wrap">
+      <a href="#overview">Overview</a>
+      <a href="#abstract">Abstract</a>
+      <a href="#method">Method</a>
+      <a href="#algorithms">Algorithms</a>
+      <a href="#benchmark">Benchmark</a>
+      <a href="#platform">Real-World</a>
+      <a href="#demos">Demonstrations</a>
+      <a href="#results">Results</a>
+    </div>
+  </nav>
+  <section id="overview">
+    <div class="wrap">
+      <figure class="fig">
+        <img src="static/F1.png" alt="">
+        <figcaption class="cap">Illustration of the proposed Multi-Factor Lifelong Embodied Navigation (MFLEN) problem. a) Traditional single-factor lifelong learning, where the agent continually learns along a single task dimension and updates its knowledge sequentially. b) Multi-factor lifelong learning, where tasks evolve along multiple coupled dimensions, requiring the agent to decouple and represent different factor-level knowledge instead of treating each task as an isolated unit. c) In the proposed MFLEN task, a navigation agent continually learns from a sequence of coupled navigation scenarios and decouples scene knowledge, environment knowledge, and instruction-style knowledge. The goal of the proposed MFLEN is to dynamically compose the learned factor-level knowledge during inference and evolve toward a universal embodied navigation agent for all-scenario navigation.</figcaption>
+      </figure>
+    </div>
+  </section>
+  <section id="abstract" class="soft">
+    <div class="wrap">
+      <h2 class="h2">Abstract<span class="u"></span></h2>
+      <div class="narrow"><p class="abstract">Recent large-scale vision-language models have significantly advanced embodied navigation across diverse paradigms. However, existing navigation agents are typically trained or adapted under static task settings, making it difficult to continually acquire new knowledge in dynamic open-world environments without forgetting previously learned scenarios. Moreover, real-world navigation scenarios are usually determined by multiple coupled factors, such as physical scenes, environmental conditions, and instruction styles, while existing LoRA-based adaptation methods mainly learn task-level matrix adapters and cannot explicitly decouple such hierarchical knowledge. To address these limitations, we formulate a new problem, termed Multi-Factor Lifelong Embodied Navigation (MFLEN), where an agent is required to continually learn from coupled navigation scenarios, decouple factor-level knowledge, and dynamically compose learned knowledge during task-agnostic inference. To solve MFLEN, we propose Tucker Adaptation++ (TuKA++), a generalized high-order tensor adaptation framework that represents multi-factor navigation knowledge through Tucker decomposition. It decouples scene, environment, and instruction-style knowledge into factor-specific expert matrices, and aligns the high-order tensor representation with two-dimensional LLM parameter matrices through tensor contraction. We further design a Factor-wise Knowledge Inheritance and Exploration strategy and a progressively expandable shared Tucker subspace with dynamic zero-padding to support continual learning while structurally preserving old task adapters. Extensive experiments demonstrate that TuKA++ consistently outperforms state-of-the-art baselines.</p></div>
+    </div>
+  </section>
+  <section id="method">
+    <div class="wrap">
+      <h2 class="h2">Method<span class="u"></span></h2>
+      <figure class="fig">
+        <img src="static/F3.png" alt="">
+        <figcaption class="cap">Comparison between LoRA, MoE LoRA, and our TuKA++ for representing coupled navigation knowledge. a) Vanilla LoRA directly learns a task-specific adapter for each coupled navigation scenario, where scene, environment, and instruction-style knowledge are entangled into a single matrix-level representation. b) MoE-based LoRA methods represent a sequence of coupled navigation scenarios with a shared matrix $A$ and multiple matrices $\{B_n\}$. Although this design efficiently explores shared-specific knowledge across tasks, each expert cannot explicitly decouple multi-level knowledge factors. c) TuKA++ represents coupled knowledge in a high-order tensor space. Scene, environment, and instruction-style knowledge are decoupled into independent factor expert matrices, and the corresponding experts can be dynamically composed during inference.</figcaption>
+      </figure>
+      <figure class="fig">
+        <img src="static/F4.png" alt="">
+        <figcaption class="cap">Illustration of the proposed Decoupled Knowledge Incremental Representation for decouple learning the multi-hierarchical navigation knowledge in a high-dimensional tensor space. Our TuKA++ performs decoupled knowledge learning with Factor-wise Knowledge Inheritance and Exploration strategy, and performs anti-forgetfulness learning with Progressively Expandable Shared Tucker Subspace strategy.</figcaption>
+      </figure>
+      <div class="math">For the $t$-th coupled scenario $T_t=(S_s,E_e,L_p)$ (scene $s$, environment $e$, instruction-style $p$), the per-layer adapter is $$\Delta W_t^{l} = U_1^{l}\cdot\big(\mathcal{G}^{l}\times_3 U_3^{l}[s,:]\times_4 U_4^{l}[e,:]\times_5 U_5^{l}[p,:]\big)\cdot (U_2^{l})^{\top},$$ where $\mathcal{G}$ is the shared core tensor, $U_1,U_2$ are the shared encoder/decoder factors, and $U_3,U_4,U_5$ are the scene, environment, and instruction-style expert factors. Old-task adapters are preserved bit-exactly via a progressively expandable shared subspace with dynamic zero-padding.</div>
+      <figure class="fig">
+        <img src="static/F2.png" alt="" style="max-width:60%">
+        <figcaption class="cap">Illustration of catastrophic forgetting in continual skills learning. The new skill adaptation leads to catastrophic forgetting of old skills.</figcaption>
+      </figure>
+    </div>
+  </section>
+<section id="algorithms" class="soft">
+    <div class="wrap">
+      <h2 class="h2">Algorithms<span class="u"></span></h2>
+      <p class="lead">The TuKA++ training pipeline and the task-agnostic inference procedure.</p>
+      
+      <div class="grid" style="align-items: start; gap: 20px;">
+        <figure class="fig" style="margin-top: 0;">
+          <img src="static/algorithm1.png" alt="" style="max-width: 100%;" onerror="this.style.display='none';this.nextElementSibling.style.display='block'">
+          <figcaption class="cap">Algorithm 1: TuKA++ training pipeline.</figcaption>
+        </figure>
+        
+        <figure class="fig" style="margin-top: 0;">
+          <img src="static/algorithm1.png" alt="" style="max-width: 100%;" onerror="this.style.display='none';this.nextElementSibling.style.display='block'">
+          <figcaption class="cap">Algorithm 2: TuKA++ task-agnostic inference.</figcaption>
+        </figure>
+      </div>
+
+    </div>
+  </section>
+  <section id="benchmark">
+    <div class="wrap">
+      <h2 class="h2">MFLEN Benchmark<span class="u"></span></h2>
+      <figure class="fig">
+        <img src="static/F6.png" alt="">
+        <figcaption class="cap">Illustration of the proposed MFLEN benchmark. It contains 40 multi-factor embodied navigation tasks constructed from different combinations of scenes, environmental conditions (normal, low-light, overexposure, and scattering), and instruction styles (Vision-and-Language Navigation (VLN), Object Localization Navigation (OLN), and Dialogue-based Understanding Navigation (DUN)). Each task is coupled with the three types of knowledge. The first 30 tasks are used for sequential learning, the remaining 10 tasks are held out to evaluate generalization to factor combinations.</figcaption>
+      </figure>
+      <h3 class="h3">Allday-Habitat Simulator</h3>
+      <figure class="fig">
+        <img src="static/F5.png" alt="">
+        <figcaption class="cap">Examples of navigation scenarios generated by the proposed Allday-Habitat simulator. The platform extends the standard Habitat simulator from normal visual conditions to diverse environmental degradations, including (a) normal, (b) low-light, (c) overexposure, and (d) scattering.</figcaption>
+      </figure>
+    </div>
+  </section>
+  <section id="platform" class="soft">
+    <div class="wrap">
+      <h2 class="h2">Real-World Robotic Platform<span class="u"></span></h2>
+      <figure class="fig">
+        <img src="static/F7.png" alt="" style="max-width:80%">
+        <figcaption class="cap">Illustration of the real-world robotic navigation platforms.</figcaption>
+      </figure>
+    </div>
+  </section>
+  <section id="demos">
+    <div class="wrap">
+      <h2 class="h2">Navigation Demonstrations<span class="u"></span></h2>
+      <p class="lead">Task-wise rollouts across the 40-task MFLEN benchmark, in order. Tasks 1&ndash;30 are learned sequentially (lifelong learning); Tasks 31&ndash;40 are held-out generalization tasks (inference only, not trained).</p>
+      <h3 class="h3">Lifelong Learning <span class="cnt">Tasks 1&ndash;30 &middot; continual learning</span></h3>
+      <div class="grid">
+        <article class="vcard">
+          <div class="vwrap">
+            <video controls preload="none" playsinline>
+              <source src="static/video/Task-1.mp4" type="video/mp4">
+            </video>
+            <span class="tasktag">Task 1</span>
+            <span class="speed">1&times;</span>
+          </div>
+          <div class="vbody">
+            <div class="badges">
+              <span class="badge type-VLN" title="Vision-and-Language Navigation">VLN</span>
+              <span class="badge env-scatter">Scattering</span>
+              <span class="badge scene">E9uDoFAP3SH</span>
+            </div>
+            <p class="instr">Walk into the room and turn left. Walk right past the staircase and into the hall to the right of the chair. Walk straight ahead into the large room and stop next to the rug.</p>
+          </div>
+        </article>
+        <article class="vcard">
+          <div class="vwrap">
+            <video controls preload="none" playsinline>
+              <source src="static/video/Task-2.mp4" type="video/mp4">
+            </video>
+            <span class="tasktag">Task 2</span>
+            <span class="speed">1&times;</span>
+          </div>
+          <div class="vbody">
+            <div class="badges">
+              <span class="badge type-DUN" title="Dialogue-based Understanding Navigation">DUN</span>
+              <span class="badge env-normal">Normal</span>
+              <span class="badge scene">2n8kARJN3HM</span>
+            </div>
+            <p class="instr">Find the lamp. Navigator: Im guessing straight thru the doorway? Oracle: Yes, go through the doorway and turn right to the stairs.</p>
+          </div>
+        </article>
+        <article class="vcard">
+          <div class="vwrap">
+            <video controls preload="none" playsinline>
+              <source src="static/video/Task-3.mp4" type="video/mp4">
+            </video>
+            <span class="tasktag">Task 3</span>
+            <span class="speed">1&times;</span>
+          </div>
+          <div class="vbody">
+            <div class="badges">
+              <span class="badge type-VLN" title="Vision-and-Language Navigation">VLN</span>
+              <span class="badge env-low">Low Light</span>
+              <span class="badge scene">E9uDoFAP3SH</span>
+            </div>
+            <p class="instr">Leave the bedroom, and take a right. Go into the hallway straight across. Enter the sitting room. Stop once you reach the rug.</p>
+          </div>
+        </article>
+        <article class="vcard">
+          <div class="vwrap">
+            <video controls preload="none" playsinline>
+              <source src="static/video/Task-4.mp4" type="video/mp4">
+            </video>
+            <span class="tasktag">Task 4</span>
+            <span class="speed">1&times;</span>
+          </div>
+          <div class="vbody">
+            <div class="badges">
+              <span class="badge type-DUN" title="Dialogue-based Understanding Navigation">DUN</span>
+              <span class="badge env-normal">Normal</span>
+              <span class="badge scene">b8cTxDM8gDG</span>
+            </div>
+            <p class="instr">Find the book. Navigator: Should I go through the door in front of me? Oracle: Yes go through the door and keep going straight past spider man Navigator: Should I go through the door to the left of the window or continue? Oracle: Go straight then head down the stairs on your left Navigator: Should I go left or right at the bottom of the stairs? Oracle: Go right then go right again to the landing of the next set of stairs.</p>
+          </div>
+        </article>
+        <article class="vcard">
+          <div class="vwrap">
+            <video controls preload="none" playsinline>
+              <source src="static/video/Task-5.mp4" type="video/mp4">
+            </video>
+            <span class="tasktag">Task 5</span>
+            <span class="speed">1&times;</span>
+          </div>
+          <div class="vbody">
+            <div class="badges">
+              <span class="badge type-OLN" title="Object Localization Navigation">OLN</span>
+              <span class="badge env-low">Low Light</span>
+              <span class="badge scene">Real-World 2</span>
+            </div>
+            <p class="instr">Go around the corner to your left and find the red ball placed next to the cardboard box.</p>
+          </div>
+        </article>
+        <article class="vcard">
+          <div class="vwrap">
+            <video controls preload="none" playsinline>
+              <source src="static/video/Task-6.mp4" type="video/mp4">
+            </video>
+            <span class="tasktag">Task 6</span>
+            <span class="speed">1&times;</span>
+          </div>
+          <div class="vbody">
+            <div class="badges">
+              <span class="badge type-DUN" title="Dialogue-based Understanding Navigation">DUN</span>
+              <span class="badge env-scatter">Scattering</span>
+              <span class="badge scene">B6ByNegPMKs</span>
+            </div>
+            <p class="instr">Find the sign. Navigator: Should I go to the right or left hallway? Oracle: Go right and keep going straight down the hallway Navigator: should I keep going down this hallway still? Oracle: Just keep going straight till you get to an intersection</p>
+          </div>
+        </article>
+        <article class="vcard">
+          <div class="vwrap">
+            <video controls preload="none" playsinline>
+              <source src="static/video/Task-7.mp4" type="video/mp4">
+            </video>
+            <span class="tasktag">Task 7</span>
+            <span class="speed">1&times;</span>
+          </div>
+          <div class="vbody">
+            <div class="badges">
+              <span class="badge type-DUN" title="Dialogue-based Understanding Navigation">DUN</span>
+              <span class="badge env-scatter">Scattering</span>
+              <span class="badge scene">uNb9QFRL6hY</span>
+            </div>
+            <p class="instr">Find the box. Navigator: Do we go left or right? Oracle: Right, down the stairs and towards the kitchen</p>
+          </div>
+        </article>
+        <article class="vcard">
+          <div class="vwrap">
+            <video controls preload="none" playsinline>
+              <source src="static/video/Task-8.mp4" type="video/mp4">
+            </video>
+            <span class="tasktag">Task 8</span>
+            <span class="speed">1&times;</span>
+          </div>
+          <div class="vbody">
+            <div class="badges">
+              <span class="badge type-VLN" title="Vision-and-Language Navigation">VLN</span>
+              <span class="badge env-low">Low Light</span>
+              <span class="badge scene">Real-World 5</span>
+            </div>
+            <p class="instr">Move forward along the corridor, keep the cardboard boxes on your right, then turn left at the blue cone and stop beside the traffic barrier.</p>
+          </div>
+        </article>
+        <article class="vcard">
+          <div class="vwrap">
+            <video controls preload="none" playsinline>
+              <source src="static/video/Task-9.mp4" type="video/mp4">
+            </video>
+            <span class="tasktag">Task 9</span>
+            <span class="speed">1&times;</span>
+          </div>
+          <div class="vbody">
+            <div class="badges">
+              <span class="badge type-DUN" title="Dialogue-based Understanding Navigation">DUN</span>
+              <span class="badge env-low">Low Light</span>
+              <span class="badge scene">B6ByNegPMKs</span>
+            </div>
+            <p class="instr">Find the sign. Navigator: I am in a hallway, standing outside a small office with a white desk and black chair inside. The open office door is to my left. Where do I go? Oracle: You need to turn to your left and head all the way down the hall and make another left</p>
+          </div>
+        </article>
+        <article class="vcard">
+          <div class="vwrap">
+            <video controls preload="none" playsinline>
+              <source src="static/video/Task-10.mp4" type="video/mp4">
+            </video>
+            <span class="tasktag">Task 10</span>
+            <span class="speed">1&times;</span>
+          </div>
+          <div class="vbody">
+            <div class="badges">
+              <span class="badge type-OLN" title="Object Localization Navigation">OLN</span>
+              <span class="badge env-scatter">Scattering</span>
+              <span class="badge scene">EDJbREhghzL</span>
+            </div>
+            <p class="instr">Go to the lounge on level 1 and remove all the items from the top of the fireplace</p>
+          </div>
+        </article>
+        <article class="vcard">
+          <div class="vwrap">
+            <video controls preload="none" playsinline>
+              <source src="static/video/Task-11.mp4" type="video/mp4">
+            </video>
+            <span class="tasktag">Task 11</span>
+            <span class="speed">1&times;</span>
+          </div>
+          <div class="vbody">
+            <div class="badges">
+              <span class="badge type-VLN" title="Vision-and-Language Navigation">VLN</span>
+              <span class="badge env-normal">Normal</span>
+              <span class="badge scene">PX4nDJXEHrG</span>
+            </div>
+            <p class="instr">Go to the right of the stairs and into the large master bedroom.  Wait at the doorway to the bathroom.</p>
+          </div>
+        </article>
+        <article class="vcard">
+          <div class="vwrap">
+            <video controls preload="none" playsinline>
+              <source src="static/video/Task-12.mp4" type="video/mp4">
+            </video>
+            <span class="tasktag">Task 12</span>
+            <span class="speed">1&times;</span>
+          </div>
+          <div class="vbody">
+            <div class="badges">
+              <span class="badge type-DUN" title="Dialogue-based Understanding Navigation">DUN</span>
+              <span class="badge env-normal">Normal</span>
+              <span class="badge scene">Real-World 2</span>
+            </div>
+            <p class="instr">Find the box. Navigator: Should I go straight or turn? Oracle: Go straight past the cones, then turn left at the corner; the box is against the wall.</p>
+          </div>
+        </article>
+        <article class="vcard">
+          <div class="vwrap">
+            <video controls preload="none" playsinline>
+              <source src="static/video/Task-13.mp4" type="video/mp4">
+            </video>
+            <span class="tasktag">Task 13</span>
+            <span class="speed">1&times;</span>
+          </div>
+          <div class="vbody">
+            <div class="badges">
+              <span class="badge type-OLN" title="Object Localization Navigation">OLN</span>
+              <span class="badge env-low">Low Light</span>
+              <span class="badge scene">vyrNrziPKCB</span>
+            </div>
+            <p class="instr">Go to the bathroom on level 2 next to the rec room and refold the hand towels to the right of the sink</p>
+          </div>
+        </article>
+        <article class="vcard">
+          <div class="vwrap">
+            <video controls preload="none" playsinline>
+              <source src="static/video/Task-14.mp4" type="video/mp4">
+            </video>
+            <span class="tasktag">Task 14</span>
+            <span class="speed">1&times;</span>
+          </div>
+          <div class="vbody">
+            <div class="badges">
+              <span class="badge type-DUN" title="Dialogue-based Understanding Navigation">DUN</span>
+              <span class="badge env-over">Overexposure</span>
+              <span class="badge scene">EDJbREhghzL</span>
+            </div>
+            <p class="instr">Find the toiletpaper. Navigator: Should I proceed inside, or take the path towards the pool? Oracle: You should go straight, turn left at the circle, then go right toward the far end of the building.</p>
+          </div>
+        </article>
+        <article class="vcard">
+          <div class="vwrap">
+            <video controls preload="none" playsinline>
+              <source src="static/video/Task-15.mp4" type="video/mp4">
+            </video>
+            <span class="tasktag">Task 15</span>
+            <span class="speed">1&times;</span>
+          </div>
+          <div class="vbody">
+            <div class="badges">
+              <span class="badge type-VLN" title="Vision-and-Language Navigation">VLN</span>
+              <span class="badge env-low">Low Light</span>
+              <span class="badge scene">Real-World 4</span>
+            </div>
+            <p class="instr">Walk straight ahead, pass between the two orange cones, then bear right around the cardboard box and stop in front of the wall.</p>
+          </div>
+        </article>
+        <article class="vcard">
+          <div class="vwrap">
+            <video controls preload="none" playsinline>
+              <source src="static/video/Task-16.mp4" type="video/mp4">
+            </video>
+            <span class="tasktag">Task 16</span>
+            <span class="speed">1&times;</span>
+          </div>
+          <div class="vbody">
+            <div class="badges">
+              <span class="badge type-OLN" title="Object Localization Navigation">OLN</span>
+              <span class="badge env-normal">Normal</span>
+              <span class="badge scene">vyrNrziPKCB</span>
+            </div>
+            <p class="instr">Move to the hallway next to the kitchen and turn the knob on the sink</p>
+          </div>
+        </article>
+        <article class="vcard">
+          <div class="vwrap">
+            <video controls preload="none" playsinline>
+              <source src="static/video/Task-17.mp4" type="video/mp4">
+            </video>
+            <span class="tasktag">Task 17</span>
+            <span class="speed">1&times;</span>
+          </div>
+          <div class="vbody">
+            <div class="badges">
+              <span class="badge type-OLN" title="Object Localization Navigation">OLN</span>
+              <span class="badge env-normal">Normal</span>
+              <span class="badge scene">82sE5b5pLXE</span>
+            </div>
+            <p class="instr">Go to the end of the hallway and bring me the pot next to the doorway</p>
+          </div>
+        </article>
+        <article class="vcard">
+          <div class="vwrap">
+            <video controls preload="none" playsinline>
+              <source src="static/video/Task-18.mp4" type="video/mp4">
+            </video>
+            <span class="tasktag">Task 18</span>
+            <span class="speed">1&times;</span>
+          </div>
+          <div class="vbody">
+            <div class="badges">
+              <span class="badge type-VLN" title="Vision-and-Language Navigation">VLN</span>
+              <span class="badge env-scatter">Scattering</span>
+              <span class="badge scene">1LXtFkjw3qL</span>
+            </div>
+            <p class="instr">Leave the bedroom and walk straight down the hall. Once you pass the brown leather chairs on your left, take the left to the bedroom. Stop in the doorway before you enter the bedroom.</p>
+          </div>
+        </article>
+        <article class="vcard">
+          <div class="vwrap">
+            <video controls preload="none" playsinline>
+              <source src="static/video/Task-19.mp4" type="video/mp4">
+            </video>
+            <span class="tasktag">Task 19</span>
+            <span class="speed">1&times;</span>
+          </div>
+          <div class="vbody">
+            <div class="badges">
+              <span class="badge type-VLN" title="Vision-and-Language Navigation">VLN</span>
+              <span class="badge env-over">Overexposure</span>
+              <span class="badge scene">1pXnuDYAj8r</span>
+            </div>
+            <p class="instr">Exit the storage area, then turn left and move through the bedroom into the hallway. Make a sharp left and move three steps down the stairway.</p>
+          </div>
+        </article>
+        <article class="vcard">
+          <div class="vwrap">
+            <video controls preload="none" playsinline>
+              <source src="static/video/Task-20.mp4" type="video/mp4">
+            </video>
+            <span class="tasktag">Task 20</span>
+            <span class="speed">1&times;</span>
+          </div>
+          <div class="vbody">
+            <div class="badges">
+              <span class="badge type-DUN" title="Dialogue-based Understanding Navigation">DUN</span>
+              <span class="badge env-normal">Normal</span>
+              <span class="badge scene">Real-World 4</span>
+            </div>
+            <p class="instr">Find the cone. Navigator: Which way now? Oracle: Head forward, keep the cardboard box on your right, and stop when you reach the blue cone.</p>
+          </div>
+        </article>
+        <article class="vcard">
+          <div class="vwrap">
+            <video controls preload="none" playsinline>
+              <source src="static/video/Task-21.mp4" type="video/mp4">
+            </video>
+            <span class="tasktag">Task 21</span>
+            <span class="speed">1&times;</span>
+          </div>
+          <div class="vbody">
+            <div class="badges">
+              <span class="badge type-OLN" title="Object Localization Navigation">OLN</span>
+              <span class="badge env-normal">Normal</span>
+              <span class="badge scene">EDJbREhghzL</span>
+            </div>
+            <p class="instr">Go to the lounge on level 1 and on the wall above the stand with the lamp remove the bottom of the two vertically adjacent pictures</p>
+          </div>
+        </article>
+        <article class="vcard">
+          <div class="vwrap">
+            <video controls preload="none" playsinline>
+              <source src="static/video/Task-22.mp4" type="video/mp4">
+            </video>
+            <span class="tasktag">Task 22</span>
+            <span class="speed">1&times;</span>
+          </div>
+          <div class="vbody">
+            <div class="badges">
+              <span class="badge type-OLN" title="Object Localization Navigation">OLN</span>
+              <span class="badge env-over">Overexposure</span>
+              <span class="badge scene">cV4RVeZvu5T</span>
+            </div>
+            <p class="instr">Go to the bathroom on first level and pick up the towel next to the sink</p>
+          </div>
+        </article>
+        <article class="vcard">
+          <div class="vwrap">
+            <video controls preload="none" playsinline>
+              <source src="static/video/Task-23.mp4" type="video/mp4">
+            </video>
+            <span class="tasktag">Task 23</span>
+            <span class="speed">1&times;</span>
+          </div>
+          <div class="vbody">
+            <div class="badges">
+              <span class="badge type-VLN" title="Vision-and-Language Navigation">VLN</span>
+              <span class="badge env-normal">Normal</span>
+              <span class="badge scene">759xd9YjKW5</span>
+            </div>
+            <p class="instr">Exit the bathroom, then the bedroom and turn right. Go across the landing and through the archway. Turn sharp right and wait in the bedroom.</p>
+          </div>
+        </article>
+        <article class="vcard">
+          <div class="vwrap">
+            <video controls preload="none" playsinline>
+              <source src="static/video/Task-24.mp4" type="video/mp4">
+            </video>
+            <span class="tasktag">Task 24</span>
+            <span class="speed">1&times;</span>
+          </div>
+          <div class="vbody">
+            <div class="badges">
+              <span class="badge type-DUN" title="Dialogue-based Understanding Navigation">DUN</span>
+              <span class="badge env-low">Low Light</span>
+              <span class="badge scene">aayBHfsNo7d</span>
+            </div>
+            <p class="instr">Find the bed. Navigator: Where now? Up the stairs? Oracle: Yep, head up the stairs until you get to the platform on the stairs half way up, where the painting is. Navigator: Where to now? Oracle: Go out of this room and take a left, then go straight all the way down the hallway.</p>
+          </div>
+        </article>
+        <article class="vcard">
+          <div class="vwrap">
+            <video controls preload="none" playsinline>
+              <source src="static/video/Task-25.mp4" type="video/mp4">
+            </video>
+            <span class="tasktag">Task 25</span>
+            <span class="speed">1&times;</span>
+          </div>
+          <div class="vbody">
+            <div class="badges">
+              <span class="badge type-DUN" title="Dialogue-based Understanding Navigation">DUN</span>
+              <span class="badge env-normal">Normal</span>
+              <span class="badge scene">e9zR4mvMWw7</span>
+            </div>
+            <p class="instr">Find the tv. Navigator: guide me Oracle: Head around the banister and down the stairs about two pillars then guess and we&#x27;ll be out of here.</p>
+          </div>
+        </article>
+        <article class="vcard">
+          <div class="vwrap">
+            <video controls preload="none" playsinline>
+              <source src="static/video/Task-26.mp4" type="video/mp4">
+            </video>
+            <span class="tasktag">Task 26</span>
+            <span class="speed">1&times;</span>
+          </div>
+          <div class="vbody">
+            <div class="badges">
+              <span class="badge type-OLN" title="Object Localization Navigation">OLN</span>
+              <span class="badge env-over">Overexposure</span>
+              <span class="badge scene">EDJbREhghzL</span>
+            </div>
+            <p class="instr">Walk into the study and face the fireplace and pick up the trinket on the fireplace shelf</p>
+          </div>
+        </article>
+        <article class="vcard">
+          <div class="vwrap">
+            <video controls preload="none" playsinline>
+              <source src="static/video/Task-27.mp4" type="video/mp4">
+            </video>
+            <span class="tasktag">Task 27</span>
+            <span class="speed">1&times;</span>
+          </div>
+          <div class="vbody">
+            <div class="badges">
+              <span class="badge type-VLN" title="Vision-and-Language Navigation">VLN</span>
+              <span class="badge env-low">Low Light</span>
+              <span class="badge scene">Real-World 1</span>
+            </div>
+            <p class="instr">Go forward past the pole on your left, turn right at the red barrel, and continue until you reach the stack of boxes, then stop.</p>
+          </div>
+        </article>
+        <article class="vcard">
+          <div class="vwrap">
+            <video controls preload="none" playsinline>
+              <source src="static/video/Task-28.mp4" type="video/mp4">
+            </video>
+            <span class="tasktag">Task 28</span>
+            <span class="speed">1&times;</span>
+          </div>
+          <div class="vbody">
+            <div class="badges">
+              <span class="badge type-VLN" title="Vision-and-Language Navigation">VLN</span>
+              <span class="badge env-low">Low Light</span>
+              <span class="badge scene">r1Q1Z4BcV1o</span>
+            </div>
+            <p class="instr">Walk towards the water dispenser and exit the doorway to the left. Walk straight left of the white circular table and towards the wooden staircase.</p>
+          </div>
+        </article>
+        <article class="vcard">
+          <div class="vwrap">
+            <video controls preload="none" playsinline>
+              <source src="static/video/Task-29.mp4" type="video/mp4">
+            </video>
+            <span class="tasktag">Task 29</span>
+            <span class="speed">1&times;</span>
+          </div>
+          <div class="vbody">
+            <div class="badges">
+              <span class="badge type-DUN" title="Dialogue-based Understanding Navigation">DUN</span>
+              <span class="badge env-scatter">Scattering</span>
+              <span class="badge scene">S9hNv5qa7GM</span>
+            </div>
+            <p class="instr">Find the nightstand. Navigator: Ok, I see a sort of night stand but I guess I need help. Oracle: Walk around past the dresser, out the door to your right and on to the bottom of the staircase Navigator: Oops I ended up in someone&#x27;s bedroom. Oracle: Turn around and go out down the hallway until you reach a bathroom</p>
+          </div>
+        </article>
+        <article class="vcard">
+          <div class="vwrap">
+            <video controls preload="none" playsinline>
+              <source src="static/video/Task-30.mp4" type="video/mp4">
+            </video>
+            <span class="tasktag">Task 30</span>
+            <span class="speed">1&times;</span>
+          </div>
+          <div class="vbody">
+            <div class="badges">
+              <span class="badge type-OLN" title="Object Localization Navigation">OLN</span>
+              <span class="badge env-normal">Normal</span>
+              <span class="badge scene">Real-World 1</span>
+            </div>
+            <p class="instr">Move ahead past the blue cone and locate the cup resting on top of the cardboard box on your right.</p>
+          </div>
+        </article>
+      </div>
+      <h3 class="h3">Generalization <span class="cnt">Tasks 31&ndash;40 &middot; held-out, inference only</span></h3>
+      <div class="grid">
+        <article class="vcard">
+          <div class="vwrap">
+            <video controls preload="none" playsinline>
+              <source src="static/video/Task-31.mp4" type="video/mp4">
+            </video>
+            <span class="tasktag">Task 31</span>
+            <span class="speed">1&times;</span>
+          </div>
+          <div class="vbody">
+            <div class="badges">
+              <span class="badge type-OLN" title="Object Localization Navigation">OLN</span>
+              <span class="badge env-low">Low Light</span>
+              <span class="badge scene">82sE5b5pLXE</span>
+            </div>
+            <p class="instr">Go to the bathroom on level 1 that has wooden walls a tiled shower and a lamp that has the number &quot;8&quot; on it and check the brightness of the light in the corner of the room</p>
+          </div>
+        </article>
+        <article class="vcard">
+          <div class="vwrap">
+            <video controls preload="none" playsinline>
+              <source src="static/video/Task-32.mp4" type="video/mp4">
+            </video>
+            <span class="tasktag">Task 32</span>
+            <span class="speed">1&times;</span>
+          </div>
+          <div class="vbody">
+            <div class="badges">
+              <span class="badge type-VLN" title="Vision-and-Language Navigation">VLN</span>
+              <span class="badge env-scatter">Scattering</span>
+              <span class="badge scene">kEZ7cmS4wCh</span>
+            </div>
+            <p class="instr">Turn to the right and go down the stairs.  At the bottom of the stairs turn left and proceed out to the patio.  Stop right there, you will see the pool in front of you.  Wait there.</p>
+          </div>
+        </article>
+        <article class="vcard">
+          <div class="vwrap">
+            <video controls preload="none" playsinline>
+              <source src="static/video/Task-33.mp4" type="video/mp4">
+            </video>
+            <span class="tasktag">Task 33</span>
+            <span class="speed">1&times;</span>
+          </div>
+          <div class="vbody">
+            <div class="badges">
+              <span class="badge type-DUN" title="Dialogue-based Understanding Navigation">DUN</span>
+              <span class="badge env-over">Overexposure</span>
+              <span class="badge scene">b8cTxDM8gDG</span>
+            </div>
+            <p class="instr">Find the tv. Navigator: Shall I continue, see for further TV&#x27;s or head closer? Oracle: Turn to the right and go straight down that hallway until you reach the stairs. Navigator: I unintentionally did not make a movement, just go ahead and repeat your instructions, sorry about that Oracle: Turn to the right and go straight down that hallway until you reach the stairs.</p>
+          </div>
+        </article>
+        <article class="vcard">
+          <div class="vwrap">
+            <video controls preload="none" playsinline>
+              <source src="static/video/Task-34.mp4" type="video/mp4">
+            </video>
+            <span class="tasktag">Task 34</span>
+            <span class="speed">1&times;</span>
+          </div>
+          <div class="vbody">
+            <div class="badges">
+              <span class="badge type-VLN" title="Vision-and-Language Navigation">VLN</span>
+              <span class="badge env-low">Low Light</span>
+              <span class="badge scene">1pXnuDYAj8r</span>
+            </div>
+            <p class="instr">Walk forward, face left at the stairs, wait on the staircase.</p>
+          </div>
+        </article>
+        <article class="vcard">
+          <div class="vwrap">
+            <video controls preload="none" playsinline>
+              <source src="static/video/Task-35.mp4" type="video/mp4">
+            </video>
+            <span class="tasktag">Task 35</span>
+            <span class="speed">1&times;</span>
+          </div>
+          <div class="vbody">
+            <div class="badges">
+              <span class="badge type-OLN" title="Object Localization Navigation">OLN</span>
+              <span class="badge env-over">Overexposure</span>
+              <span class="badge scene">82sE5b5pLXE</span>
+            </div>
+            <p class="instr">Go to the bathroom on level one next to the master bedroom and turn off the light inside the shower stall</p>
+          </div>
+        </article>
+        <article class="vcard">
+          <div class="vwrap">
+            <video controls preload="none" playsinline>
+              <source src="static/video/Task-36.mp4" type="video/mp4">
+            </video>
+            <span class="tasktag">Task 36</span>
+            <span class="speed">1&times;</span>
+          </div>
+          <div class="vbody">
+            <div class="badges">
+              <span class="badge type-VLN" title="Vision-and-Language Navigation">VLN</span>
+              <span class="badge env-scatter">Scattering</span>
+              <span class="badge scene">1pXnuDYAj8r</span>
+            </div>
+            <p class="instr">move down the hallway to the left of the stairs.</p>
+          </div>
+        </article>
+        <article class="vcard">
+          <div class="vwrap">
+            <video controls preload="none" playsinline>
+              <source src="static/video/Task-37.mp4" type="video/mp4">
+            </video>
+            <span class="tasktag">Task 37</span>
+            <span class="speed">1&times;</span>
+          </div>
+          <div class="vbody">
+            <div class="badges">
+              <span class="badge type-VLN" title="Vision-and-Language Navigation">VLN</span>
+              <span class="badge env-normal">Normal</span>
+              <span class="badge scene">r1Q1Z4BcV1o</span>
+            </div>
+            <p class="instr">Leave bathroom. turn slight right, head towards main room and stop there.</p>
+          </div>
+        </article>
+        <article class="vcard">
+          <div class="vwrap">
+            <video controls preload="none" playsinline>
+              <source src="static/video/Task-38.mp4" type="video/mp4">
+            </video>
+            <span class="tasktag">Task 38</span>
+            <span class="speed">1&times;</span>
+          </div>
+          <div class="vbody">
+            <div class="badges">
+              <span class="badge type-VLN" title="Vision-and-Language Navigation">VLN</span>
+              <span class="badge env-normal">Normal</span>
+              <span class="badge scene">Real-World 3</span>
+            </div>
+            <p class="instr">Walk forward toward the blue cone, turn left before reaching it, follow the aisle past the cardboard boxes, and stop at the end.</p>
+          </div>
+        </article>
+        <article class="vcard">
+          <div class="vwrap">
+            <video controls preload="none" playsinline>
+              <source src="static/video/Task-39.mp4" type="video/mp4">
+            </video>
+            <span class="tasktag">Task 39</span>
+            <span class="speed">1&times;</span>
+          </div>
+          <div class="vbody">
+            <div class="badges">
+              <span class="badge type-DUN" title="Dialogue-based Understanding Navigation">DUN</span>
+              <span class="badge env-low">Low Light</span>
+              <span class="badge scene">Real-World 3</span>
+            </div>
+            <p class="instr">Find the ball. Navigator: It is dark, where do I go? Oracle: Move slowly along the wall on your left, pass the barrel, and the red ball is just beyond it.</p>
+          </div>
+        </article>
+        <article class="vcard">
+          <div class="vwrap">
+            <video controls preload="none" playsinline>
+              <source src="static/video/Task-40.mp4" type="video/mp4">
+            </video>
+            <span class="tasktag">Task 40</span>
+            <span class="speed">1&times;</span>
+          </div>
+          <div class="vbody">
+            <div class="badges">
+              <span class="badge type-OLN" title="Object Localization Navigation">OLN</span>
+              <span class="badge env-normal">Normal</span>
+              <span class="badge scene">Real-World 5</span>
+            </div>
+            <p class="instr">Walk to the far side of the room and find the small red ball between the yellow cone and the traffic barrier.</p>
+          </div>
+        </article>
+      </div>
+    </div>
+  </section>
+  <section id="results" class="soft">
+    <div class="wrap">
+      <h2 class="h2">Experimental Results<span class="u"></span></h2>
+      <p class="lead">TuKA++ consistently outperforms state-of-the-art continual-adaptation baselines under the MFLEN setting.</p>
+      <figure class="fig">
+        <img src="static/result_sr.png" alt="" onerror="this.style.display='none';this.nextElementSibling.style.display='block'">
+        <figcaption class="cap">Task-wise Success Rate (SR &uarr;, %) under the MFLEN setting. Tasks 1&ndash;30 are lifelong-learning tasks; Tasks 31&ndash;40 are unseen factor-combination generalization tasks.</figcaption>
+      </figure>
+      <figure class="fig">
+        <img src="static/result_fsr.png" alt="" onerror="this.style.display='none';this.nextElementSibling.style.display='block'">
+        <figcaption class="cap">Task-wise Forgetting Success Rate (F-SR &darr;, %) under the MFLEN setting. Tasks 1&ndash;30 are lifelong-learning tasks; Tasks 31&ndash;40 are unseen factor-combination generalization tasks.</figcaption>
+      </figure>
+      <figure class="fig">
+        <img src="static/F8.png" alt="">
+        <figcaption class="cap">Radar chart comparison of SPL, F-SPL, OSR, and F-OSR under the MFLEN setting.</figcaption>
+      </figure>
+      <figure class="fig">
+        <img src="static/F9.png" alt="">
+        <figcaption class="cap">Comparison between the StreamVLN backbone and TuKA++ on the MFLEN benchmark.</figcaption>
+      </figure>
+    </div>
+  </section>
+  <div style="height:52px"></div>
+  <script>
+  (function(){
+    var links=[].slice.call(document.querySelectorAll('.nav a'));
+    var map={}; links.forEach(function(a){map[a.getAttribute('href').slice(1)]=a;});
+    var obs=new IntersectionObserver(function(es){
+      es.forEach(function(e){
+        if(e.isIntersecting){
+          links.forEach(function(a){a.classList.remove('active');});
+          var a=map[e.target.id]; if(a)a.classList.add('active');
+        }
+      });
+    },{rootMargin:'-45% 0px -50% 0px',threshold:0});
+    document.querySelectorAll('section[id]').forEach(function(s){obs.observe(s);});
+  })();
+  </script>
+</body>
+</html>

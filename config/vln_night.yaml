@@ -1,0 +1,268 @@
+# @package _global_
+
+defaults:
+  - /habitat: habitat_config_base
+  - /habitat/task: vln_r2r
+  - /habitat/simulator/agents@habitat.simulator.agents.main_agent: rgbd_agent
+  - /habitat/dataset/vln: mp3d_r2r
+  - /habitat/task/lab_sensors:
+    - gps_sensor
+    - compass_sensor
+  - _self_
+
+habitat:
+  environment:
+    max_episode_steps: 500
+    iterator_options:
+      max_scene_repeat_steps: 50000
+      shuffle: False
+      
+  simulator:
+    agents:
+      main_agent:
+        sim_sensors:
+          rgb_sensor:
+            width: 640
+            height: 480
+            hfov: 79
+            noise_model: "LowLightNoiseModel"
+            noise_model_kwargs:
+              # ============================================
+              # 方法1: 手动调整参数（推荐用于精细控制）
+              # ============================================
+              brightness_factor: 0.15              # 🎯 核心参数！控制整体亮度
+                                                  # 1.0  = 正常亮度
+                                                  # 0.6  = 黄昏
+                                                  # 0.4  = 室内昏暗
+                                                  # 0.3  = 夜晚街道
+                                                  # 0.2  = 月光
+                                                  # 0.15 = 深夜
+                                                  # 0.08 = 极暗
+                                                  # 0.03 = 几乎全黑
+              
+              noise_level: "medium"              # 噪声级别
+                                                  # "minimal" = 几乎无噪声
+                                                  # "low"     = 轻微噪声（推荐）
+                                                  # "medium"  = 中等噪声
+                                                  # "high"    = 较强噪声
+                                                  # 或直接使用0.0-1.0的数值
+              
+              exposure: 0.15                      # 曝光倍数 (0.01-1.0)
+              gain: 8.0                           # 传感器增益/ISO (1.0-32.0)
+                                                  # 1.0  = ISO 100
+                                                  # 4.0  = ISO 400
+                                                  # 8.0  = ISO 800
+                                                  # 16.0 = ISO 1600+
+              
+              shot_noise_factor: 0.4             # 散粒噪声因子 (0.0-1.0)
+              read_noise_sigma: 3.0               # 读出噪声标准差 (0.0-10.0)
+              denoise_strength: 0.75               # 降噪强度 (0.0-1.0)
+              preserve_details: 0.7              # 细节保留度 (0.0-1.0)
+              
+              gamma: 2.2                          # 伽马校正值 (1.0-3.0)
+              contrast_factor: 0.75               # 对比度因子 (0.5-1.0)
+              saturation_factor: 0.50             # 饱和度因子 (0.0-1.0)
+              
+              color_temperature: null             # 色温RGB值，null使用场景默认
+                                                  # [1.1, 1.0, 0.9]  = 暖光
+                                                  # [1.0, 1.0, 1.0]  = 中性
+                                                  # [0.9, 0.95, 1.1] = 冷光/月光
+              
+              scene_type: "night"                 # 场景类型
+                                                  # "neutral"   = 中性
+                                                  # "indoor"    = 室内
+                                                  # "street"    = 街道
+                                                  # "night"     = 夜晚
+                                                  # "moonlight" = 月光
+                                                  # "extreme"   = 极端低光
+              
+              enable_noise: true                  # 是否启用噪声
+              enable_blur: false                  # 是否启用运动模糊
+              vignette_strength: 0.4              # 暗角强度 (0.0-1.0)
+              depth_aware: false                  # 是否考虑深度信息
+              
+          # depth_sensor:
+          #   width: 640
+          #   height: 480
+          #   hfov: 79
+          #   min_depth: 0.0
+          #   max_depth: 10.0
+          #   noise_model: "RedwoodDepthNoiseModel"  
+          #   noise_model_kwargs: {}
+            
+    forward_step_size: 0.25
+    turn_angle: 15
+    habitat_sim_v0:
+      gpu_device_id: 0
+    
+  task:
+    measurements:
+      distance_to_goal:
+        type: DistanceToGoal
+        distance_to: POINT
+      success:
+        type: Success
+        success_distance: 3.0
+      spl:
+        type: SPL
+      # oracle_success:
+      #   type: OracleSuccess
+      # oracle_navigation_error:
+      #   type: OracleNavigationError
+        
+  dataset:
+    type: R2RVLN-v1
+    split: val_seen
+    scenes_dir: data/scene_datasets/
+    data_path: data/datasets/r2r/{split}/{split}.json.gz
+
+
+# ============================================
+# 方法2: 使用预设配置（8种预设直接选择）
+# ============================================
+# 将上面的 noise_model_kwargs 替换为以下任一预设：
+
+# 1. 正常光照 (无低光效果)
+# noise_model_kwargs:
+#   brightness_factor: 1.0
+#   noise_level: "minimal"
+#   exposure: 1.0
+#   gain: 1.0
+#   shot_noise_factor: 0.1
+#   read_noise_sigma: 0.5
+#   denoise_strength: 0.0
+#   preserve_details: 1.0
+#   gamma: 2.2
+#   contrast_factor: 1.0
+#   saturation_factor: 1.0
+#   scene_type: "neutral"
+#   enable_noise: false
+#   enable_blur: false
+#   vignette_strength: 0.0
+
+# 2. 黄昏 (轻微低光)
+# noise_model_kwargs:
+#   brightness_factor: 0.6
+#   noise_level: "minimal"
+#   exposure: 0.8
+#   gain: 1.5
+#   shot_noise_factor: 0.2
+#   read_noise_sigma: 1.0
+#   denoise_strength: 0.3
+#   preserve_details: 0.9
+#   gamma: 2.2
+#   contrast_factor: 0.95
+#   saturation_factor: 0.9
+#   color_temperature: [1.1, 1.0, 0.9]
+#   scene_type: "neutral"
+#   enable_noise: true
+#   enable_blur: false
+#   vignette_strength: 0.0
+
+# 3. 室内昏暗
+# noise_model_kwargs:
+#   brightness_factor: 0.4
+#   noise_level: "low"
+#   exposure: 0.5
+#   gain: 2.0
+#   shot_noise_factor: 0.25
+#   read_noise_sigma: 1.5
+#   denoise_strength: 0.5
+#   preserve_details: 0.85
+#   gamma: 2.2
+#   contrast_factor: 0.9
+#   saturation_factor: 0.85
+#   scene_type: "indoor"
+#   enable_noise: true
+#   enable_blur: false
+#   vignette_strength: 0.0
+
+# 4. 夜晚街道 (有路灯)
+# noise_model_kwargs:
+#   brightness_factor: 0.3
+#   noise_level: "low"
+#   exposure: 0.3
+#   gain: 4.0
+#   shot_noise_factor: 0.3
+#   read_noise_sigma: 2.0
+#   denoise_strength: 0.6
+#   preserve_details: 0.8
+#   gamma: 2.2
+#   contrast_factor: 0.85
+#   saturation_factor: 0.75
+#   scene_type: "street"
+#   enable_noise: true
+#   enable_blur: false
+#   vignette_strength: 0.2
+
+# 5. 月光环境
+# noise_model_kwargs:
+#   brightness_factor: 0.2
+#   noise_level: "low"
+#   exposure: 0.25
+#   gain: 6.0
+#   shot_noise_factor: 0.35
+#   read_noise_sigma: 2.5
+#   denoise_strength: 0.7
+#   preserve_details: 0.75
+#   gamma: 2.2
+#   contrast_factor: 0.8
+#   saturation_factor: 0.6
+#   scene_type: "moonlight"
+#   enable_noise: true
+#   enable_blur: false
+#   vignette_strength: 0.3
+
+# 6. 深夜 (推荐配置)
+# noise_model_kwargs:
+#   brightness_factor: 0.15
+#   noise_level: "medium"
+#   exposure: 0.15
+#   gain: 8.0
+#   shot_noise_factor: 0.4
+#   read_noise_sigma: 3.0
+#   denoise_strength: 0.75
+#   preserve_details: 0.7
+#   gamma: 2.2
+#   contrast_factor: 0.75
+#   saturation_factor: 0.5
+#   scene_type: "night"
+#   enable_noise: true
+#   enable_blur: false
+#   vignette_strength: 0.4
+
+# 7. 极暗环境
+# noise_model_kwargs:
+#   brightness_factor: 0.08
+#   noise_level: "medium"
+#   exposure: 0.1
+#   gain: 12.0
+#   shot_noise_factor: 0.5
+#   read_noise_sigma: 4.0
+#   denoise_strength: 0.8
+#   preserve_details: 0.6
+#   gamma: 2.2
+#   contrast_factor: 0.7
+#   saturation_factor: 0.4
+#   scene_type: "night"
+#   enable_noise: true
+#   enable_blur: true
+#   vignette_strength: 0.5
+
+# 8. 几乎全黑
+# noise_model_kwargs:
+#   brightness_factor: 0.03
+#   noise_level: "high"
+#   exposure: 0.05
+#   gain: 16.0
+#   shot_noise_factor: 0.6
+#   read_noise_sigma: 5.0
+#   denoise_strength: 0.85
+#   preserve_details: 0.5
+#   gamma: 2.2
+#   contrast_factor: 0.6
+#   saturation_factor: 0.3
+#   scene_type: "extreme"
+#   enable_noise: true
+#   enable_blur: true
+#   vignette_strength: 0.6

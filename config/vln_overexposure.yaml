@@ -1,0 +1,207 @@
+# @package _global_
+
+defaults:
+  - /habitat: habitat_config_base
+  - /habitat/task: vln_r2r
+  - /habitat/simulator/agents@habitat.simulator.agents.main_agent: rgbd_agent
+  - /habitat/dataset/vln: mp3d_r2r
+  - /habitat/task/lab_sensors:
+    - gps_sensor
+    - compass_sensor
+  - _self_
+
+habitat:
+  environment:
+    max_episode_steps: 500
+    iterator_options:
+      max_scene_repeat_steps: 50000
+      shuffle: False
+      
+  simulator:
+    agents:
+      main_agent:
+        sim_sensors:
+          rgb_sensor:
+            width: 640
+            height: 480
+            hfov: 79
+            noise_model: "OverexposureNoiseModel"
+            noise_model_kwargs:
+              # ============================================
+              # 方法1: 手动调整参数（推荐用于精细控制）
+              # ============================================
+              exposure: 2.0                        # 🎯 核心参数！控制曝光倍数
+                                                  # 1.0  = 正常曝光
+                                                  # 1.5  = 轻微过曝
+                                                  # 2.5  = 中度过曝
+                                                  # 4.0  = 严重过曝
+                                                  # 8.0  = 极度过曝
+              
+              gain: 1.35                          # 传感器增益 (ISO/100)
+                                                  # 1.0 = ISO 100
+                                                  # 2.0 = ISO 200
+                                                  # 4.0 = ISO 400
+                                                  # 8.0 = ISO 800
+              
+              full_well: 0.925                    # 传感器饱和值（线性域最大值）
+                                                  # 1.0 = 标准饱和点
+                                                  # 0.9 = 提前饱和（更容易过曝）
+                                                  # 0.8 = 低饱和点
+              
+              sigma_read: 0.0125                 # 读出噪声标准差
+                                                  # 0.005 = 低噪声
+                                                  # 0.015 = 中等噪声
+                                                  # 0.03  = 高噪声
+              
+              gamma: 2.1                         # 伽马校正值
+                                                  # 2.2 = 标准sRGB
+                                                  # 1.8 = 更亮的图像
+                                                  # 2.4 = 更暗的图像
+              
+              overexposure_type: "light_moderate"      # 过曝光类型预设
+                                                  # normal/slight/light_moderate/moderate/severe/extreme
+              
+              wavelength_effect: true            # 启用波长相关效应
+                                                  # true = 不同颜色通道响应不同
+              
+              bloom_strength: 0.2                # 光晕效果强度 (0-1)
+                                                  # 0 = 无光晕
+                                                  # 0.3 = 中等光晕
+                                                  # 0.7 = 强光晕
+              
+              highlight_rolloff: true           # 启用高光溢出效果
+              
+          depth_sensor:
+            width: 640
+            height: 480
+            hfov: 79
+            min_depth: 0.0
+            max_depth: 10.0
+            
+    forward_step_size: 0.25
+    turn_angle: 15
+    habitat_sim_v0:
+      gpu_device_id: 0
+    
+  task:
+    measurements:
+      distance_to_goal:
+        type: DistanceToGoal
+        distance_to: POINT
+      success:
+        type: Success
+        success_distance: 3.0
+      spl:
+        type: SPL
+      # oracle_success:
+      #   type: OracleSuccess
+      # oracle_navigation_error:
+      #   type: OracleNavigationError
+        
+  dataset:
+    type: R2RVLN-v1
+    split: val_seen
+    scenes_dir: data/scene_datasets/
+    data_path: data/datasets/r2r/{split}/{split}.json.gz
+
+
+# ============================================
+# 方法2: 使用预设配置（8种预设直接选择）
+# ============================================
+# 将上面的 noise_model_kwargs 替换为以下任一预设：
+
+# 1. 正常曝光 (无过曝光)
+# noise_model_kwargs:
+#   exposure: 1.0
+#   gain: 1.0
+#   full_well: 1.0
+#   sigma_read: 0.005
+#   gamma: 2.2
+#   overexposure_type: "normal"
+#   wavelength_effect: false
+#   bloom_strength: 0.0
+#   highlight_rolloff: false
+
+# 2. 轻微过曝光
+# noise_model_kwargs:
+#   exposure: 1.5
+#   gain: 1.2
+#   full_well: 0.95
+#   sigma_read: 0.01
+#   gamma: 2.2
+#   overexposure_type: "slight"
+#   wavelength_effect: true
+#   bloom_strength: 0.1
+#   highlight_rolloff: true
+
+# 3. 中度过曝光
+# noise_model_kwargs:
+#   exposure: 2.5
+#   gain: 1.5
+#   full_well: 0.9
+#   sigma_read: 0.015
+#   gamma: 2.0
+#   overexposure_type: "moderate"
+#   wavelength_effect: true
+#   bloom_strength: 0.3
+#   highlight_rolloff: true
+
+# 4. 严重过曝光
+# noise_model_kwargs:
+#   exposure: 4.0
+#   gain: 2.0
+#   full_well: 0.8
+#   sigma_read: 0.025
+#   gamma: 1.8
+#   overexposure_type: "severe"
+#   wavelength_effect: true
+#   bloom_strength: 0.5
+#   highlight_rolloff: true
+
+# 5. 极度过曝光
+# noise_model_kwargs:
+#   exposure: 8.0
+#   gain: 3.0
+#   full_well: 0.7
+#   sigma_read: 0.04
+#   gamma: 1.5
+#   overexposure_type: "extreme"
+#   wavelength_effect: true
+#   bloom_strength: 0.7
+#   highlight_rolloff: true
+
+# 6. 强阳光场景
+# noise_model_kwargs:
+#   exposure: 3.0
+#   gain: 1.8
+#   full_well: 0.85
+#   sigma_read: 0.02
+#   gamma: 2.0
+#   overexposure_type: "moderate"
+#   wavelength_effect: true
+#   bloom_strength: 0.4
+#   highlight_rolloff: true
+
+# 7. 逆光场景
+# noise_model_kwargs:
+#   exposure: 2.0
+#   gain: 1.4
+#   full_well: 0.88
+#   sigma_read: 0.012
+#   gamma: 2.1
+#   overexposure_type: "moderate"
+#   wavelength_effect: true
+#   bloom_strength: 0.25
+#   highlight_rolloff: true
+
+# 8. 高ISO噪声场景
+# noise_model_kwargs:
+#   exposure: 1.8
+#   gain: 2.5
+#   full_well: 0.92
+#   sigma_read: 0.03
+#   gamma: 2.2
+#   overexposure_type: "slight"
+#   wavelength_effect: true
+#   bloom_strength: 0.15
+#   highlight_rolloff: true

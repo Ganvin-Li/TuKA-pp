@@ -1,0 +1,161 @@
+# @package _global_
+
+defaults:
+  - /habitat: habitat_config_base
+  - /habitat/task: vln_r2r
+  - /habitat/simulator/agents@habitat.simulator.agents.main_agent: rgbd_agent
+  - /habitat/dataset/vln: mp3d_r2r
+  - /habitat/task/lab_sensors:
+    - gps_sensor
+    - compass_sensor
+  - _self_
+
+habitat:
+  environment:
+    max_episode_steps: 500
+    iterator_options:
+      max_scene_repeat_steps: 50000
+      shuffle: False
+      
+  simulator:
+    agents:
+      main_agent:
+        sim_sensors:
+          rgb_sensor:
+            width: 640
+            height: 480
+            hfov: 79
+            noise_model: "AtmosphericScatteringNoiseModel"
+            noise_model_kwargs:
+              # ============================================
+              # 方法1: 手动调整参数（推荐用于精细控制）
+              # ============================================
+              beta: 0.01                          # 🎯 核心参数！控制雾霾浓度
+                                                  # 0.01 = 几乎无雾
+                                                  # 0.05 = 轻微雾霾
+                                                  # 0.1  = 中度雾霾
+                                                  # 0.2  = 重度雾霾
+                                                  # 0.3  = 浓雾
+                                                  # 0.5+ = 能见度极低
+              
+              atmospheric_light: [0.95, 0.95, 1.0]  # 大气光颜色 (RGB)
+                                                   # [0.9, 0.9, 0.9] = 白色雾
+                                                   # [0.7, 0.65, 0.6] = 黄褐色雾霾
+                                                   # [0.9, 0.8, 0.6] = 沙尘
+              
+              max_distance: 200.0                   # 最大可见距离（米）
+              scattering_type: "haze"              # 类型: haze/fog/smog/dust
+              wavelength_effect: False              # 启用波长相关效应
+              particle_size: 1.0                   # PM颗粒大小
+              depth_estimation_method: "simple"    # simple 或 gradient
+              
+          depth_sensor:
+            width: 640
+            height: 480
+            hfov: 79
+            min_depth: 0.0
+            max_depth: 10.0
+            
+    forward_step_size: 0.25
+    turn_angle: 15
+    habitat_sim_v0:
+      gpu_device_id: 0
+    
+  task:
+    measurements:
+      distance_to_goal:
+        type: DistanceToGoal
+        distance_to: POINT
+      success:
+        type: Success
+        success_distance: 3.0
+      spl:
+        type: SPL  
+      # oracle_success:
+      #   type: OracleSuccess
+      # oracle_navigation_error:
+      #   type: OracleNavigationError
+        
+  dataset:
+    type: R2RVLN-v1
+    split: val_seen
+    scenes_dir: data/scene_datasets/
+    data_path: data/datasets/r2r/{split}/{split}.json.gz
+
+
+# ============================================
+# 方法2: 使用预设配置（8种预设直接选择）
+# ============================================
+# 将上面的 noise_model_kwargs 替换为以下任一预设：
+
+# 1. 清晰天气 (几乎无散射)
+# noise_model_kwargs:
+#   beta: 0.01
+#   atmospheric_light: [0.95, 0.95, 1.0]
+#   max_distance: 200.0
+#   scattering_type: "haze"
+#   wavelength_effect: false
+#   particle_size: 0.1
+
+# 2. 轻度雾霾
+# noise_model_kwargs:
+#   beta: 0.05
+#   atmospheric_light: [0.85, 0.85, 0.9]
+#   max_distance: 100.0
+#   scattering_type: "haze"
+#   wavelength_effect: true
+#   particle_size: 1.0
+
+# 3. 中度雾霾
+# noise_model_kwargs:
+#   beta: 0.1
+#   atmospheric_light: [0.8, 0.8, 0.85]
+#   max_distance: 80.0
+#   scattering_type: "haze"
+#   wavelength_effect: true
+#   particle_size: 1.5
+
+# 4. 重度雾霾
+# noise_model_kwargs:
+#   beta: 0.2
+#   atmospheric_light: [0.75, 0.75, 0.8]
+#   max_distance: 50.0
+#   scattering_type: "haze"
+#   wavelength_effect: true
+#   particle_size: 2.0
+
+# 5. 浓雾
+# noise_model_kwargs:
+#   beta: 0.3
+#   atmospheric_light: [0.9, 0.9, 0.9]
+#   max_distance: 30.0
+#   scattering_type: "fog"
+#   wavelength_effect: true
+#   particle_size: 5.0
+
+# 6. 城市雾霾 (黄褐色)
+# noise_model_kwargs:
+#   beta: 0.15
+#   atmospheric_light: [0.7, 0.65, 0.6]
+#   max_distance: 60.0
+#   scattering_type: "smog"
+#   wavelength_effect: true
+#   particle_size: 2.5
+
+# 7. 沙尘暴
+# noise_model_kwargs:
+#   beta: 0.4
+#   atmospheric_light: [0.9, 0.8, 0.6]
+#   max_distance: 20.0
+#   scattering_type: "dust"
+#   wavelength_effect: true
+#   particle_size: 10.0
+
+# 8. 严重污染
+# noise_model_kwargs:
+#   beta: 0.5
+#   atmospheric_light: [0.6, 0.55, 0.5]
+#   max_distance: 15.0
+#   scattering_type: "smog"
+#   wavelength_effect: true
+#   particle_size: 3.0
