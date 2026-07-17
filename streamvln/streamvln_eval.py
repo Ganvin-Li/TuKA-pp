@@ -2,11 +2,13 @@ import sys
 import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
+# Import habitat-sim first, then the custom noise models
 import habitat_sim
 from habitat_extensions import AtmosphericScatteringNoiseModel, AtmosphericScatteringPresets
 from habitat_extensions import LowLightNoiseModel, LowLightPresets
 from habitat_extensions import OverexposureNoiseModel, OverexposurePresets
 
+# Verify the registrations and register the noise models manually
 try:
     if "AtmosphericScatteringNoiseModel" not in habitat_sim.registry._get_noise_model_registry():
         habitat_sim.registry.register_noise_model(AtmosphericScatteringNoiseModel)
@@ -82,13 +84,6 @@ class VLNEvaluator:
         self.agent_config = get_agent_config(self.config.habitat.simulator)
         self.sim_sensors_config = self.config.habitat.simulator.agents.main_agent.sim_sensors
 
-        self.expert_weights = None
-        if hasattr(args, 'expert_weights') and args.expert_weights:
-            self.expert_weights = torch.tensor([
-                float(w) for w in args.expert_weights.split(',')
-            ], device=self.device)
-            print(f"Using expert weights: {self.expert_weights}")
-
         with habitat.config.read_write(self.config):
             # self.config.habitat.task.measurements.success.success_distance=3.0
             self.config.habitat.dataset.split = self.split
@@ -163,11 +158,11 @@ class VLNEvaluator:
         self.num_future_steps = args.num_future_steps
         self.num_history = args.num_history
 
-        self.use_hard_routing = getattr(args, 'use_hard_routing', False)
+        # TuKA++ (5D Tucker) hard routing over the (scene, env, instr) triple.
+        # At inference the factor indices are resolved to the U3/U4/U5 rows that
+        # were remembered during training (paper Sec. 4.4 / Algorithm 2).
         self.scene_idx = getattr(args, 'scene_idx', None)
         self.env_idx = getattr(args, 'env_idx', None)
-        
-        # 5D Tucker-LoRA hard routing (scene, env, instr)
         self.instr_idx = getattr(args, 'instr_idx', None)
         if getattr(model, 'is_tucker_5d', False):
             self.set_model_hard_route_5d(
@@ -295,6 +290,57 @@ class VLNEvaluator:
         # env.episodes = env.episodes[0:1]
         return env
 
+    def _compose_vis_frame(self, rgb, info, panel: int = 512, pad_value: int = 255):
+        """Build ONE demo video frame with a fixed, uniform layout:
+            [ first-person RGB | full top-down map ]
+        Both panels are letterboxed (fit-preserving-aspect, never cropped) into
+        equal `panel x panel` squares on a fixed `panel x 2*panel` canvas, so
+        every saved frame is identical in size/proportion and the ENTIRE map is
+        always visible with padding on the sides.
+
+        Replaces habitat's observations_to_image(), which fit the map to the RGB
+        HEIGHT and h-concatenated -> variable frame width per episode + the map
+        getting visually cropped/inconsistent across tasks.
+
+        pad_value: 255 -> white borders, 0 -> black borders.
+        """
+        import cv2
+
+        def _fit_square(img):
+            img = np.ascontiguousarray(img).astype(np.uint8)
+            if img.ndim == 2:
+                img = np.stack([img] * 3, axis=-1)
+            if img.shape[-1] == 4:
+                img = img[..., :3]
+            h, w = img.shape[:2]
+            s = min(panel / float(h), panel / float(w))
+            nh, nw = max(1, int(round(h * s))), max(1, int(round(w * s)))
+            resized = cv2.resize(img, (nw, nh), interpolation=cv2.INTER_AREA)
+            canvas = np.full((panel, panel, 3), pad_value, dtype=np.uint8)
+            y0, x0 = (panel - nh) // 2, (panel - nw) // 2
+            canvas[y0:y0 + nh, x0:x0 + nw] = resized
+            return canvas
+
+        left = _fit_square(rgb)
+
+        td = info.get("top_down_map", None)
+        if td is not None:
+            # Colorize the FULL navigable map (fog-of-war off -> whole floor),
+            # draw the agent triangle, then letterbox the complete map.
+            top_down_map = maps.colorize_topdown_map(td["map"], td.get("fog_of_war_mask"))
+            agent_radius = max(4, min(top_down_map.shape[:2]) // 32)
+            top_down_map = maps.draw_agent(
+                image=top_down_map,
+                agent_center_coord=td["agent_map_coord"],
+                agent_rotation=td["agent_angle"],
+                agent_radius_px=agent_radius,
+            )
+            right = _fit_square(top_down_map)
+        else:
+            right = np.full((panel, panel, 3), pad_value, dtype=np.uint8)
+
+        return np.concatenate([left, right], axis=1)
+
     def eval_action(self, idx) -> None:
         env = self.config_env()
         scene_episode_dict = {}
@@ -411,8 +457,10 @@ class VLNEvaluator:
                     intrinsic_list.append(intrinsic)
                     
                     info = env.get_metrics()
-                    if info['top_down_map'] is not None:
-                        frame = observations_to_image({'rgb':observations['rgb']}, info)
+                    if info.get('top_down_map') is not None:
+                        # Fixed-layout demo frame: [ FPV | full top-down map ],
+                        # uniform size + complete map + side padding.
+                        frame = self._compose_vis_frame(observations['rgb'], info)
                         vis_frames.append(frame)
                     # import ipdb; ipdb.set_trace()
                     if len(action_seq) == 0:
@@ -506,6 +554,7 @@ class VLNEvaluator:
                 sucs.append(metrics['success'])
                 spls.append(metrics['spl'])
 
+                # Backfill oracle metrics if the measure is unavailable
                 if 'oracle_success' not in metrics:
                     metrics['oracle_success'] = metrics.get('success', 0)
                 if 'oracle_navigation_error' not in metrics:
@@ -639,12 +688,17 @@ def pad_tensors(tensors, lens=None, max_len=None, pad=0):
     return output
    
 def load_model_and_tokenizer(args):
-    """Load the model + tokenizer. Uses the 5D Tucker-LoRA snapshot when
-    present, otherwise loads the plain base model."""
+    """Load the StreamVLN backbone and, if present, the TuKA++ (5D Tucker) adapter.
+
+    TuKA++ is detected via a training snapshot (tucker5d_latest.pt). If no
+    snapshot is found, the frozen base model is loaded as-is.
+    """
     import json
 
+    # TuKA++ is detected via its training snapshot file.
     tucker5d_snapshot = getattr(args, 'tucker_5d_snapshot', None)
     if tucker5d_snapshot is None:
+        # Auto-probe: <model_path>/tucker_5d/tucker5d_latest.pt
         cand = os.path.join(args.model_path, 'tucker_5d', 'tucker5d_latest.pt')
         if os.path.exists(cand):
             tucker5d_snapshot = cand
@@ -652,10 +706,11 @@ def load_model_and_tokenizer(args):
 
     print(f"Model path: {args.model_path}")
     print(f"Base model path: {args.base_model_path if hasattr(args, 'base_model_path') else 'Not specified'}")
-    print(f"Is Tucker-5D model: {is_tucker_5d}  (snapshot={tucker5d_snapshot})")
+    print(f"Is TuKA++ (5D Tucker) model: {is_tucker_5d}  (snapshot={tucker5d_snapshot})")
+
     if is_tucker_5d:
         print("=" * 50)
-        print("LOADING 5D TUCKER-LoRA MODEL")
+        print("LOADING TuKA++ (5D TUCKER) MODEL")
         print("=" * 50)
 
         base_model_path = getattr(args, 'base_model_path', None) or args.model_path
@@ -681,6 +736,7 @@ def load_model_and_tokenizer(args):
         model.eval()
         return model, tokenizer, config, True
 
+    # No TuKA++ snapshot found -> load the frozen base model as-is.
     print("=" * 50)
     print("LOADING BASE MODEL")
     print("=" * 50)
@@ -690,7 +746,9 @@ def load_model_and_tokenizer(args):
         model_max_length=getattr(args, 'model_max_length', 2048),
         padding_side="right"
     )
+
     config = transformers.AutoConfig.from_pretrained(args.model_path)
+
     model = StreamVLNForCausalLM.from_pretrained(
         args.model_path,
         attn_implementation="flash_attention_2",
@@ -699,10 +757,11 @@ def load_model_and_tokenizer(args):
         low_cpu_mem_usage=False,
         local_files_only=True
     )
+
     print("Base model loaded successfully!")
     model.eval()
-    return model, tokenizer, config, False
 
+    return model, tokenizer, config, False
 
 def load_tucker5d_model(model, snapshot_path: str, target_modules=None):
     """
@@ -836,52 +895,51 @@ def eval():
     parser.add_argument('--device', default='cuda',
                         help='device to use for training / testing')
     parser.add_argument('--base_model_path', type=str, default=None,
-                        help='Path to the base model (for LoRA models)')
-    parser.add_argument('--lora_A_dir', type=str, default=None,
-                       help='Directory containing LoRA matrix A weights')
-    parser.add_argument('--lora_B_dir', type=str, default=None,
-                       help='Directory containing LoRA matrix B weights')
-    
-    parser.add_argument('--tucker_dir', type=str, default=None,
-                       help='Directory containing Tucker-LoRA weights')
-    parser.add_argument('--expert_weights', type=str, default=None,
-                       help='Expert weights for Tucker-LoRA MOE (comma-separated, e.g., "0.4,0.3,0.2,0.1")')
-    
-    parser.add_argument('--use_hard_routing', action='store_true', default=False,
-                        help='Use hard routing for 4D Tucker-LoRA')
-    parser.add_argument('--scene_idx', type=int, default=None,
-                        help='Scene index for hard routing (0-4)')
-    parser.add_argument('--env_idx', type=int, default=None,
-                        help='Environment index for hard routing (0-3)')
-    parser.add_argument('--auto_route_by_task', type=int, default=None,
-                        help='Automatically set route based on task ID')
+                        help='Path to the frozen StreamVLN backbone')
 
+    # TuKA++ (5D Tucker) hard-routing over the (scene, env, instruction) triple.
     parser.add_argument('--tucker_5d_snapshot', type=str, default=None,
-                        help='Path to 5D Tucker-LoRA snapshot (.pt). '
-                             'If omitted, will look for <model_path>/tucker_5d/tucker5d_latest.pt')
+                        help='Path to the TuKA++ (5D Tucker) snapshot (.pt). '
+                             'If omitted, looks for <model_path>/tucker_5d/tucker5d_latest.pt')
+    parser.add_argument('--scene_idx', type=int, default=None,
+                        help='Scene factor index s for hard routing')
+    parser.add_argument('--env_idx', type=int, default=None,
+                        help='Environment factor index e (0=Normal, 1=Low-light, 2=Scattering, 3=Overexposure)')
     parser.add_argument('--instr_idx', type=int, default=None,
-                        help='Instruction paradigm index for 5D Tucker-LoRA hard routing '
-                             '(0=VLN, 1=OLN, 2=DUN)')
+                        help='Instruction-style factor index p (0=VLN, 1=OLN, 2=DUN)')
 
     args = parser.parse_args()
     init_distributed_mode(args)
     local_rank = args.local_rank
 
-    if args.auto_route_by_task is not None:
-        task_id = args.auto_route_by_task
-        args.use_hard_routing = True
-        args.scene_idx = task_id % 5
-        args.env_idx = task_id % 4
-        print(f"Auto-routing for task {task_id}: Scene {args.scene_idx}, Env {args.env_idx}")
-
-
+    # Load the backbone and, if a snapshot exists, the TuKA++ adapter
     model, tokenizer, config, is_lora_model = load_model_and_tokenizer(args)
-    
+
+    # Move to device
     model.to('cuda')
     model.model.num_history = args.num_history
     model.requires_grad_(False)
     model.to(local_rank)
-    
+
+    # Report adapter status
+    if is_lora_model:
+        print("Verifying TuKA++ (5D Tucker) model...")
+        print(f"Model type: {type(model)}")
+
+        if getattr(model, 'is_tucker_5d', False):
+            print("TuKA++ (5D Tucker) model confirmed")
+            # Count TuKA++ adapter parameters (U1/U2 shared, U3/U4/U5 factors, G core)
+            tucker_params = 0
+            for name, module in model.named_modules():
+                if hasattr(module, 'lora_layer'):
+                    layer = module.lora_layer
+                    for tag in ('U1', 'U2', 'U3', 'U4', 'U5', 'G'):
+                        if hasattr(layer, tag):
+                            tucker_params += getattr(layer, tag).numel()
+            print(f"Total TuKA++ parameters: {tucker_params:,}")
+
+        print("=" * 50)
+
     evaluate(model, tokenizer, args)
 
 

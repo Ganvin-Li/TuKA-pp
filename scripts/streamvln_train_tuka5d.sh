@@ -1,87 +1,36 @@
 #!/usr/bin/env bash
-# streamvln_train_tuka5d.sh
-# 5D Tucker-LoRA (TuKA extension) continual-learning training.
-# Replaces EWC with Progressive Shared-Subspace Expansion + Zero-Padding.
-# Hard task selection: each task's (scene, env, instr) triple is explicit.
-
-# ============================================================
-#  Basic configuration
-# ============================================================
-# split_into_tasks.py wrote per-task data under data/task/Task_<k>/ (with
-# annotations.json + images/.../rgb/ inside). The old "task" path (no
-# data/ prefix) was from the 12-task demo and is no longer correct.
 BASE_VIDEO_FOLDER="data/task"
 BASE_MODEL="model_zoo/StreamVLN_Video_qwen_1_5_r2r_rxr_envdrop_scalevln/"
 PROMPT_VERSION="qwen_1_5"
 VISION_MODEL_VERSION="google/siglip-so400m-patch14-384"
-# Use ALL 4 A6000s. GPU 0 was previously skipped because of the display
-# server (gdm), but gdm only holds 4 MB and doesn't actually interfere
-# with training. With 4 GPUs the effective batch becomes 4*2*2 = 16,
-# matching what the LR schedule below assumes.
 NUM_GPUS=4
 export CUDA_VISIBLE_DEVICES=0,1,2,3
-# Cluster needs these NCCL flags (same as eval scripts).
 export NCCL_P2P_DISABLE=1
 export NCCL_IB_DISABLE=1
 
-# ============================================================
-#  5D Tucker-LoRA parameters
-# ============================================================
+
 USE_TUCKER_5D=true
-TUCKER_INSTR_NUM=3                                              # VLN / OLN / DUN  (r5 must reach >= 3)
-# Starting ranks (r1,r2,r3,r4,r5). The 23-task schedule has:
-#   16 unique scenes  -> r3 must grow to >= 16
-#    4 unique envs    -> r4 must grow to >=  4
-#    3 unique instr   -> r5 must grow to >=  3
-# Starting at r3=8 with DELTA_R3=2 reaches r3=16 after 4 expansions (when
-# scenes 9..16 first appear). r4=8 / r5=4 already cover their max from the
-# start. r1/r2 are the shared subspaces; 16 each is a sane starting point.
+TUCKER_INSTR_NUM=3                                          
 TUCKER_RANKS_5D="16,16,8,8,4"
 TUCKER_INIT_SCALE=0.02
 LORA_ALPHA=32
-# Trainable-only weight decay on the 5D adapter (safe wrt Theorem 1 -- only the
-# NEW U1/U2 columns + non-frozen-corner G are decayed; frozen factors are never
-# touched). Fixes the cold-start divergence where T1/T8 adapters blew up to
-# large-magnitude all-forward collapse (max|dW| ~2.9 vs working ~0.1). Applied
-# as a per-step multiplicative shrink. 0 = off. START at 0.001 and tune: after
-# training JUST task 1, run convert/diag_tucker5d_delta_norms.py on that task's
-# snapshot and confirm T1 max|dW| drops into the working band (~0.1-0.3).
-TUCKER_TRAINABLE_WD=0.001
 
-# Expansion deltas (applied only when a NEW category appears).
-# Set conservatively so 48GB A6000 doesn't OOM:
-#   r1, r2 grow by 2 each time any (s/e/p) is new -> final ~52
-#   r3 grows by 1 each time a new scene appears   -> 8 + 8 = 16 (covers all 16 scans)
-#   r4 starts at 8 >= 4 unique lighting variants  -> never expands
-#   r5 starts at 4 >= 3 instruction paradigms     -> never expands
+TUCKER_TRAINABLE_WD=0.001
+TUCKER_LAMBDA_C=1.0
+TUCKER_LAMBDA_O=0.1
+TUCKER_LAMBDA_F=0.01
+TUCKER_FISHER_OMEGA=0.9
+
 DELTA_R1=2
 DELTA_R2=2
 DELTA_R3=1
 DELTA_R4=1
 DELTA_R5=1
 
-# ============================================================
-#  Continual-learning parameters
-# ============================================================
 CONTINUAL_LEARNING=true
-# Overridable so you can train just the first task to tune TUCKER_TRAINABLE_WD
-# before committing to the full sequence:  NUM_TASKS=1 bash <this script>
-NUM_TASKS=${NUM_TASKS:-30}
 
-# ============================================================
-#  Task triples (scene_idx, env_idx, instr_idx) for the 30 TRAINED tasks of the
-#  40-task MFLEN schedule (convert/task_definition_40.json). Tasks 31-40 are
-#  held-out inference-only and are not trained here. scene_idx is assigned by
-#  first-appearance order over the 30 trained tasks (21 unique scenes).
-#  Encoding: instr_idx 0=VLN 1=OLN 2=DUN; env_idx 0=Normal 1=Low-Light 2=Scattering 3=Overexposure.
-# ============================================================
-declare -a SCENE_IDX=( 0 1 0 2 3 4 5 6 4 7 8 3 9 7 10 9 11 12 13 10 7 14 15 16 17 7 18 19 20 18 )
-declare -a ENV_IDX=(   2 0 1 0 1 2 2 1 1 2 0 0 1 3 1 0 0 2 3 0 0 3 0 1 0 3 1 1 2 0 )
-declare -a INSTR_IDX=( 0 2 0 2 1 2 2 0 2 1 0 2 1 2 0 1 1 0 0 2 1 1 0 2 2 1 0 0 2 1 )
+NUM_TASKS=${NUM_TASKS:-23}
 
-# ============================================================
-#  Environment
-# ============================================================
 export HF_HOME="$HOME/.cache/huggingface"
 export TRANSFORMERS_CACHE="$HF_HOME/transformers"
 export WANDB_MODE=offline
@@ -99,20 +48,6 @@ EXPANSION_STATE="${BASE_OUTPUT_DIR}/tucker5d_state.json"
 TUCKER_5D_DIR="${BASE_OUTPUT_DIR}/tucker_5d"
 mkdir -p ${TUCKER_5D_DIR}
 
-# ============================================================
-#  Per-task training loop
-#
-#  IMPORTANT change vs the demo: --mm_tunable_parts has DROPPED
-#  "mm_mlp_adapter". That layer (the visual projection) is SHARED across
-#  all 23 tasks; full-fine-tuning it per task = catastrophic forgetting
-#  on the visual side. After 23 tasks the projector matches Task_23's
-#  visual distribution and Task_1's LM adapter sees out-of-distribution
-#  inputs at eval. The 5D Tucker zero-padding only protects LM rows, NOT
-#  the shared projector. Keeping mm_projector frozen at base-model values
-#  ensures every task's LM adapter sees the same visual distribution it
-#  was trained on. This is the fix for the "step=1, SR=0 across many
-#  tasks" symptom.
-# ============================================================
 for TASK_ID in $(seq 0 $((NUM_TASKS - 1))); do
 
     S=${SCENE_IDX[${TASK_ID}]}
@@ -121,16 +56,10 @@ for TASK_ID in $(seq 0 $((NUM_TASKS - 1))); do
 
     TASK_VIDEO_FOLDER="${BASE_VIDEO_FOLDER}/Task_$((TASK_ID + 1))"
 
-    echo "============================================================"
-    echo "[TuKA-5D]  task ${TASK_ID}/${NUM_TASKS}  triple=(s=${S}, e=${E}, p=${P})"
-    echo "[TuKA-5D]  data: ${TASK_VIDEO_FOLDER}"
-    echo "============================================================"
-
     MASTER_PORT=$((MASTER_PORT_BASE + TASK_ID))
     TASK_OUTPUT_DIR="${BASE_OUTPUT_DIR}/task_${TASK_ID}_s${S}_e${E}_p${P}"
     RUN_NAME="${BASE_RUN_NAME}_task${TASK_ID}_s${S}_e${E}_p${P}"
 
-    # Subsequent tasks auto-resume growth state via --expansion_state_path / --tucker_5d_dir
     torchrun \
       --nnodes 1 \
       --nproc_per_node ${NUM_GPUS} \
@@ -140,7 +69,7 @@ for TASK_ID in $(seq 0 $((NUM_TASKS - 1))); do
       streamvln/streamvln_train.py \
         --deepspeed scripts/zero2.json \
         --model_name_or_path ${BASE_MODEL} \
-        --use_lora true \
+        --use_lora true `# master switch: enable the TuKA++ adapter (backbone stays frozen)` \
         --use_tucker_5d ${USE_TUCKER_5D} \
         --tucker_instr_num ${TUCKER_INSTR_NUM} \
         --tucker_ranks_5d "${TUCKER_RANKS_5D}" \
@@ -159,6 +88,10 @@ for TASK_ID in $(seq 0 $((NUM_TASKS - 1))); do
         --delta_r4 ${DELTA_R4} \
         --delta_r5 ${DELTA_R5} \
         --tucker_trainable_wd ${TUCKER_TRAINABLE_WD} \
+        --tucker_lambda_c ${TUCKER_LAMBDA_C} \
+        --tucker_lambda_o ${TUCKER_LAMBDA_O} \
+        --tucker_lambda_f ${TUCKER_LAMBDA_F} \
+        --tucker_fisher_omega ${TUCKER_FISHER_OMEGA} \
         --expansion_state_path "${EXPANSION_STATE}" \
         --tucker_5d_dir "${TUCKER_5D_DIR}" \
         --version ${PROMPT_VERSION} \
@@ -210,9 +143,3 @@ for TASK_ID in $(seq 0 $((NUM_TASKS - 1))); do
     echo "[TuKA-5D] task ${TASK_ID} OK  ->  ${TASK_OUTPUT_DIR}"
     sleep 3
 done
-
-echo "============================================================"
-echo "[TuKA-5D] All ${NUM_TASKS} tasks completed."
-echo "[TuKA-5D] Expansion state: ${EXPANSION_STATE}"
-echo "[TuKA-5D] Latest weights : ${TUCKER_5D_DIR}/tucker5d_latest.pt"
-echo "============================================================"

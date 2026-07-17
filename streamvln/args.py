@@ -105,13 +105,6 @@ class TrainingArguments(transformers.TrainingArguments):
     double_quant: bool = field(default=True, metadata={"help": "Compress the quantization statistics through double quantization."})
     quant_type: str = field(default="nf4", metadata={"help": "Quantization data type to use. Should be one of `fp4` or `nf4`."})
     bits: int = field(default=16, metadata={"help": "How many bits to use."})
-    lora_enable: bool = False
-    lora_r: int = 64
-    lora_alpha: int = 16
-    lora_dropout: float = 0.05
-    lora_weight_path: str = ""
-    lora_target_modules: str = "q_proj,v_proj"
-    lora_bias: str = "none"
     mm_projector_lr: Optional[float] = None
     mm_vision_tower_lr: Optional[float] = None
     group_by_varlen: bool = field(default=False)
@@ -123,46 +116,78 @@ class TrainingArguments(transformers.TrainingArguments):
     verbose_logging: bool = field(default=False)
     attn_implementation: str = field(default="flash_attention_2", metadata={"help": "Use transformers attention implementation."})
 
-    # LoRA
-    use_lora: bool = field(default=False, metadata={"help": "Enable LoRA-style fine-tuning"})
-    lora_r: int = field(default=64, metadata={"help": "LoRA rank"})
-    lora_alpha: int = field(default=32, metadata={"help": "LoRA alpha"})
-    lora_dropout: float = field(default=0.05, metadata={"help": "LoRA dropout"})
-    lora_target_modules: str = field(default="q_proj,k_proj,v_proj,o_proj,gate_proj,up_proj,down_proj", metadata={"help": "Target Linear modules to adapt"})
-    lora_bias: str = field(default="none", metadata={"help": "LoRA bias setting"})
+    # ======================================================================
+    # TuKA++ (5D Tucker adaptation) settings -- this is the ONLY adaptation
+    # method used in the paper. All other branches (plain LoRA, 4th-order
+    # TuKA, HydraLoRA / MoE-LoRA, EWC) have been removed.
+    # ======================================================================
+    # Master switch that enables the TuKA++ adapter and keeps the adapter
+    # factors (U1..U5, G) trainable while the LLM backbone stays frozen.
+    use_lora: bool = field(default=False, metadata={"help": "Enable the TuKA++ adapter (backbone stays frozen)"})
+    # LoRA scaling factor alpha (paper: alpha = 32) and dropout on the adapter.
+    lora_alpha: int = field(default=32, metadata={"help": "TuKA++ scaling factor alpha (paper: 32)"})
+    lora_dropout: float = field(default=0.05, metadata={"help": "Dropout applied on the adapter input"})
+    lora_target_modules: str = field(default="q_proj,k_proj,v_proj,o_proj,gate_proj,up_proj,down_proj", metadata={"help": "Transformer linear modules to wrap with TuKA++"})
+    lora_bias: str = field(default="none", metadata={"help": "Bias handling for the adapted modules"})
 
-    pretrained_checkpoint_path: Optional[str] = field(default=None, metadata={"help": "Pretrained checkpoint path"})
-    tucker_init_scale: float = field(default=0.02, metadata={"help": "Initialization scale for Tucker factors"})
+    # Path to the frozen StreamVLN backbone / previous-task checkpoint.
+    pretrained_checkpoint_path: Optional[str] = field(default=None, metadata={"help": "Pretrained checkpoint path (frozen StreamVLN backbone)"})
 
-    # Continual (lifelong) learning
-    continual_learning: bool = field(default=False, metadata={"help": "Enable continual learning mode"})
-    num_tasks: int = field(default=20, metadata={"help": "Number of continual-learning tasks"})
-    current_task_id: int = field(default=0, metadata={"help": "Current task id"})
+    # Shared initialization scale for the Tucker factors (paper: 0.02).
+    tucker_init_scale: float = field(default=0.02, metadata={"help": "Initialization scale for the Tucker factors (paper: 0.02)"})
 
-    # ==================================================================
-    # 5D Tucker-LoRA (TuKA++): scene x env x instruction-style experts with a
-    # progressively expandable shared subspace and dynamic zero-padding.
-    # ==================================================================
-    use_tucker_5d: bool = field(default=False, metadata={"help": "Use 5D Tucker decomposition (scene, env, instruction hierarchies)"})
-    tucker_instr_num: int = field(default=3, metadata={"help": "Number of instruction paradigms (VLN/OLN/DUN)"})
-    tucker_ranks_5d: str = field(default="16,16,8,8,4", metadata={"help": "Initial 5D Tucker ranks (r1,r2,r3,r4,r5)"})
+    # ------------------------------------------------------------------
+    # Continual learning (MFLEN) settings
+    # ------------------------------------------------------------------
+    continual_learning: bool = field(default=False, metadata={"help": "Enable the MFLEN lifelong-learning loop"})
+    num_tasks: int = field(default=30, metadata={"help": "Number of sequential lifelong tasks (paper: 30 trained tasks)"})
+    current_task_id: int = field(default=0, metadata={"help": "Index of the current task in the sequence"})
 
-    current_scene_idx: int = field(default=0, metadata={"help": "Current task scene id"})
-    current_env_idx: int = field(default=0, metadata={"help": "Current task environment id"})
-    current_instr_idx: int = field(default=0, metadata={"help": "Current task instruction-style id (0=VLN, 1=OLN, 2=DUN)"})
+    # ======================================================================
+    # 5D Tucker adaptation: X^l in R^{a x b x |S| x |E| x |L|}, decoupling
+    # scene (U3), environment (U4) and instruction-style (U5) factors, plus a
+    # shared decoder U1 / encoder U2 and core tensor G (paper Eq. 5-9).
+    # ======================================================================
+    use_tucker_5d: bool = field(default=False, metadata={"help": "Use 5D Tucker adaptation (scene, environment, instruction-style factors)"})
+    tucker_instr_num: int = field(default=3, metadata={"help": "Number of instruction styles (VLN / OLN / DUN)"})
+    # Initial Tucker ranks (r1,r2,r3,r4,r5). Paper: r1=r2=16, r3=r4=8, r5=4.
+    tucker_ranks_5d: str = field(default="16,16,8,8,4", metadata={"help": "Initial Tucker ranks r1,r2,r3,r4,r5 (paper: 16,16,8,8,4)"})
 
-    # Trainable-only weight decay on the 5D adapter (new U1/U2 columns + the
-    # non-frozen-corner of G). Frozen factors are never touched, so old-task
-    # adapters are preserved exactly. Suppresses cold-start divergence; 0 = off.
-    tucker_trainable_wd: float = field(default=0.0, metadata={"help": "Trainable-only weight decay on the 5D Tucker adapter"})
+    # Current task factor triple (S_st, E_et, L_pt); provided explicitly during
+    # training since factor indices are available at train time (paper Sec. 3).
+    current_scene_idx: int = field(default=0, metadata={"help": "Scene id s_t of the current task"})
+    current_env_idx: int = field(default=0, metadata={"help": "Environment id e_t (0=Normal, 1=Low-light, 2=Scattering, 3=Overexposure)"})
+    current_instr_idx: int = field(default=0, metadata={"help": "Instruction-style id p_t (0=VLN, 1=OLN, 2=DUN)"})
 
-    # Rank growth step when a new category first appears.
-    delta_r1: int = field(default=4, metadata={"help": "U1/G dim-1 growth on any new category"})
-    delta_r2: int = field(default=4, metadata={"help": "U2/G dim-2 growth on any new category"})
-    delta_r3: int = field(default=2, metadata={"help": "U3/G dim-3 growth on a new scene"})
-    delta_r4: int = field(default=2, metadata={"help": "U4/G dim-4 growth on a new environment"})
-    delta_r5: int = field(default=1, metadata={"help": "U5/G dim-5 growth on a new instruction style"})
+    # Trainable-only weight decay on the adapter. It only shrinks the current
+    # task's trainable U1/U2 columns + the non-frozen corner of G; frozen
+    # factors are never touched, so the expansion-invariance (Proposition 1)
+    # stays exact. 0 disables it.
+    tucker_trainable_wd: float = field(default=0.0, metadata={"help": "Trainable-only weight decay on the TuKA++ adapter (safe w.r.t. the zero-padding proposition)"})
 
-    expansion_state_path: Optional[str] = field(default=None, metadata={"help": "TaskExpansionManager state JSON path (persisted across tasks)"})
-    tucker_5d_dir: Optional[str] = field(default=None, metadata={"help": "5D Tucker-LoRA weight directory (default output_dir/tucker_5d)"})
-    tucker_5d_load_dir: Optional[str] = field(default=None, metadata={"help": "Root directory to load 5D Tucker-LoRA weights at inference"})
+    # ======================================================================
+    # Factor-wise Knowledge Inheritance and Exploration (FKIE) losses
+    # (paper Eq. 13/14/18): orthogonality, consistency, Fisher-aware.
+    # ======================================================================
+    tucker_lambda_c: float = field(default=1.0,  metadata={"help": "Consistency loss weight lambda_c (paper: 1.0)"})
+    tucker_lambda_o: float = field(default=0.1,  metadata={"help": "Orthogonality loss weight lambda_o (paper: 0.1)"})
+    tucker_lambda_f: float = field(default=0.01, metadata={"help": "Fisher-aware regularization weight lambda_f (paper: 0.01)"})
+    tucker_fisher_omega: float = field(default=0.9, metadata={"help": "Fisher smoothing coefficient omega (paper: 0.9)"})
+
+    # Progressively Expandable Shared Tucker Subspace (PESTS) expansion ranks
+    # rho_i (paper Eq. 19). Paper: rho1=rho2=2, rho3=rho4=1, rho5=1.
+    delta_r1: int = field(default=2, metadata={"help": "rho1: grow shared rank r1 when any new factor appears (paper: 2)"})
+    delta_r2: int = field(default=2, metadata={"help": "rho2: grow shared rank r2 when any new factor appears (paper: 2)"})
+    delta_r3: int = field(default=1, metadata={"help": "rho3: grow scene rank r3 when a new scene appears (paper: 1)"})
+    delta_r4: int = field(default=1, metadata={"help": "rho4: grow environment rank r4 when a new environment appears (paper: 1)"})
+    delta_r5: int = field(default=1, metadata={"help": "rho5: grow instruction rank r5 when a new instruction style appears (paper: 1)"})
+
+    # Persistent expansion state (row mapping + ranks + seen categories) so a
+    # new torchrun invocation resumes where the previous task left off.
+    expansion_state_path: Optional[str] = field(default=None, metadata={"help": "JSON path for the TaskExpansionManager state (persisted across tasks)"})
+
+    # Directory for the per-task 5D Tucker weight snapshots.
+    tucker_5d_dir: Optional[str] = field(default=None, metadata={"help": "Directory for the 5D Tucker weight snapshots (default: output_dir/tucker_5d)"})
+
+    # Root directory from which streamvln_eval.py loads the trained snapshots.
+    tucker_5d_load_dir: Optional[str] = field(default=None, metadata={"help": "Root directory used at inference time to load the 5D Tucker snapshots"})

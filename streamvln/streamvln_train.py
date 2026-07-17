@@ -65,10 +65,12 @@ IS_TOKENIZER_GREATER_THAN_0_14 = version.parse(tokenizers.__version__) >= versio
 
 from streamvln.args import ModelArguments, DataArguments, TrainingArguments
 
-# from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training, PeftModel
-# from peft.tuners.lora import LoraLayer
 import torch.nn as nn
 import torch.nn.functional as F
+# TuKA++ (5D Tucker adaptation) is the only adaptation method kept in this
+# repo. The 4th-order TuKA layers and the EWC-based continual-learning trainer
+# (unrelated branches) have been removed; everything is imported locally from
+# streamvln.model.tucker_5d_lora_layers / continual_learning_5d where needed.
 
 
 
@@ -153,57 +155,52 @@ def safe_save_model_for_hf_trainer(trainer: transformers.Trainer, output_dir: st
     """Collects the state dict and dump to disk."""
     
     if hasattr(trainer.args, 'use_lora') and trainer.args.use_lora:
-        rank0_print("Saving Tucker-LoRA weights only...")
-        
-        tucker_dir = os.path.join(output_dir, "tucker_lora")
+        rank0_print("Saving TuKA++ (5D Tucker) adapter weights only...")
+
+        tucker_dir = os.path.join(output_dir, "tucker_5d")
         os.makedirs(tucker_dir, exist_ok=True)
-        
-        # Collect ALL Tucker-LoRA parameters, regardless of requires_grad
+
+        # Collect ALL TuKA++ adapter parameters, regardless of requires_grad
+        # (frozen historical factors must be persisted too).
         tucker_state_dict = {}
-        
+
         for name, param in trainer.model.named_parameters():
-            if 'lora_layer' in name:  # Remove the requires_grad check
-                # Save ALL Tucker layer parameters
+            if 'lora_layer' in name:
                 tucker_state_dict[name] = param.data.detach().cpu()
-        
+
         if trainer.args.should_save:
-            # Save Tucker weights
-            torch.save(tucker_state_dict, os.path.join(tucker_dir, "tucker_lora_weights.bin"))
-            
+            # Save adapter weights
+            torch.save(tucker_state_dict, os.path.join(tucker_dir, "tucker_5d_weights.bin"))
+
             # Save config
             trainer.model.config.save_pretrained(output_dir)
-            
-            # Save metadata
+
+            # Save metadata (5D Tucker: scene x environment x instruction-style)
             metadata = {
-                "model_type": "streamvln_tucker_lora",
+                "model_type": "streamvln_tuka5d",
                 "base_model_path": model_args.model_name_or_path if model_args else trainer.args.model_name_or_path,
                 "task_id": trainer.args.current_task_id,
-                "tucker_lora_config": {
+                "tuka5d_config": {
+                    "ranks_5d": trainer.args.tucker_ranks_5d,
+                    "instr_num": trainer.args.tucker_instr_num,
                     "alpha": trainer.args.lora_alpha,
                 },
             }
-            
-            with open(os.path.join(output_dir, "tucker_lora_config.json"), "w") as f:
+
+            with open(os.path.join(output_dir, "tuka5d_config.json"), "w") as f:
                 json.dump(metadata, f, indent=2)
-            
-            rank0_print(f"Tucker-LoRA weights saved to {tucker_dir}")
-            rank0_print(f"Saved {len(tucker_state_dict)} Tucker parameters:")
-            
-            # Log which parameters were saved
-            u1_params = [k for k in tucker_state_dict if '.U1' in k]
-            u2_params = [k for k in tucker_state_dict if '.U2' in k]
-            u3_params = [k for k in tucker_state_dict if '.U3' in k]
-            u4_params = [k for k in tucker_state_dict if '.U4' in k]
-            g_params = [k for k in tucker_state_dict if '.G' in k]
-            
-            rank0_print(f"  - G parameters: {len(g_params)}")
-            rank0_print(f"  - U1 parameters: {len(u1_params)}")
-            rank0_print(f"  - U2 parameters: {len(u2_params)}")
-            rank0_print(f"  - U3 parameters: {len(u3_params)}")
-            rank0_print(f"  - U4 parameters: {len(u4_params)}")
-        
+
+            rank0_print(f"TuKA++ adapter weights saved to {tucker_dir}")
+            rank0_print(f"Saved {len(tucker_state_dict)} TuKA++ parameters:")
+
+            # Log which parameters were saved (U1/U2 shared, U3/U4/U5 factors, G core)
+            for tag in ("G", "U1", "U2", "U3", "U4", "U5"):
+                n = len([k for k in tucker_state_dict if f'.{tag}' in k])
+                rank0_print(f"  - {tag} parameters: {n}")
+
         return
 
+    # Fall back to the original (non-adapter) save logic below.
     if hasattr(trainer.args, "tune_mm_mlp_adapter") and trainer.args.tune_mm_mlp_adapter:
         check_only_save_mm_adapter_tunnable = True
     elif hasattr(trainer.args, "mm_tunable_parts") and (len(trainer.args.mm_tunable_parts.split(",")) == 1 and ("mm_mlp_adapter" in trainer.args.mm_tunable_parts or "mm_vision_resampler" in trainer.args.mm_tunable_parts)):
@@ -253,41 +250,43 @@ def safe_save_model_for_hf_trainer_fsdp(trainer: transformers.Trainer,
     from torch.distributed.fsdp import StateDictType, FullStateDictConfig
     
     if hasattr(trainer.args, 'use_lora') and trainer.args.use_lora:
-        rank0_print("Saving Tucker-LoRA weights only (FSDP)...")
-        
-        tucker_dir = os.path.join(output_dir, "tucker_lora")
-        
+        rank0_print("Saving TuKA++ (5D Tucker) adapter weights only (FSDP)...")
+
+        tucker_dir = os.path.join(output_dir, "tucker_5d")
+
         if trainer.args.should_save:
             os.makedirs(tucker_dir, exist_ok=True)
             os.makedirs(output_dir, exist_ok=True)
-        
+
         # Get full state dict using FSDP
         save_policy = FullStateDictConfig(offload_to_cpu=True, rank0_only=True)
         with FSDP.state_dict_type(
             trainer.model, StateDictType.FULL_STATE_DICT, save_policy
         ):
             state_dict = trainer.model.state_dict()
-        
-        # Collect ALL Tucker-LoRA parameters (remove requires_grad check)
+
+        # Collect ALL TuKA++ adapter parameters (frozen factors included)
         tucker_state_dict = {}
-        
+
         for name, param in state_dict.items():
-            if 'lora_layer' in name:  # Save ALL lora_layer parameters
+            if 'lora_layer' in name:
                 tucker_state_dict[name] = param.detach().cpu()
-        
+
         if trainer.args.should_save:
-            # Save Tucker weights
-            torch.save(tucker_state_dict, os.path.join(tucker_dir, "tucker_lora_weights.bin"))
-            
+            # Save adapter weights
+            torch.save(tucker_state_dict, os.path.join(tucker_dir, "tucker_5d_weights.bin"))
+
             # Save model config
             trainer.model.config.save_pretrained(output_dir)
-            
-            # Save metadata with detailed info
+
+            # Save metadata (5D Tucker: scene x environment x instruction-style)
             metadata = {
-                "model_type": "streamvln_tucker_lora",
+                "model_type": "streamvln_tuka5d",
                 "base_model_path": model_args.model_name_or_path if model_args else trainer.args.model_name_or_path,
                 "task_id": trainer.args.current_task_id,
-                "tucker_lora_config": {
+                "tuka5d_config": {
+                    "ranks_5d": trainer.args.tucker_ranks_5d,
+                    "instr_num": trainer.args.tucker_instr_num,
                     "alpha": trainer.args.lora_alpha,
                     "target_modules": trainer.args.lora_target_modules,
                     "dropout": trainer.args.lora_dropout,
@@ -295,28 +294,21 @@ def safe_save_model_for_hf_trainer_fsdp(trainer: transformers.Trainer,
                 },
                 "training_type": "fsdp"
             }
-            
-            with open(os.path.join(output_dir, "tucker_lora_config.json"), "w") as f:
+
+            with open(os.path.join(output_dir, "tuka5d_config.json"), "w") as f:
                 json.dump(metadata, f, indent=2)
-            
+
             # Log saved parameters
-            rank0_print(f"Tucker-LoRA weights saved to {tucker_dir}")
-            rank0_print(f"Saved {len(tucker_state_dict)} Tucker parameters:")
-            
-            u1_params = [k for k in tucker_state_dict if '.U1' in k]
-            u2_params = [k for k in tucker_state_dict if '.U2' in k]
-            u3_params = [k for k in tucker_state_dict if '.U3' in k]
-            u4_params = [k for k in tucker_state_dict if '.U4' in k]
-            g_params = [k for k in tucker_state_dict if '.G' in k]
-            
-            rank0_print(f"  - G parameters: {len(g_params)}")
-            rank0_print(f"  - U1 parameters: {len(u1_params)}")
-            rank0_print(f"  - U2 parameters: {len(u2_params)}")
-            rank0_print(f"  - U3 parameters: {len(u3_params)}")
-            rank0_print(f"  - U4 parameters: {len(u4_params)}")
-        
+            rank0_print(f"TuKA++ adapter weights saved to {tucker_dir}")
+            rank0_print(f"Saved {len(tucker_state_dict)} TuKA++ parameters:")
+
+            for tag in ("G", "U1", "U2", "U3", "U4", "U5"):
+                n = len([k for k in tucker_state_dict if f'.{tag}' in k])
+                rank0_print(f"  - {tag} parameters: {n}")
+
         return
 
+    # Fall back to the original (non-adapter) FSDP save logic below.
     if trainer.is_fsdp_enabled:
         trainer.accelerator.state.fsdp_plugin.state_dict_type = "FULL_STATE_DICT"
     if trainer.deepspeed:
@@ -1355,12 +1347,14 @@ class DataCollatorForSupervisedDataset(object):
         return output
 
     def __call__(self, instances: Sequence[Dict]) -> Dict[str, torch.Tensor]:
-        (input_ids_batch, labels_batch, image_batch, depth_batch, 
+        # Extract each field across the batch
+        (input_ids_batch, labels_batch, image_batch, depth_batch,
         pose_batch, intrinsic_batch, time_ids_batch, inflection_weight_batch) = \
-            tuple([instance.get(key, None) for instance in instances] 
-                for key in ("input_ids", "labels", "images", "depths", 
+            tuple([instance.get(key, None) for instance in instances]
+                for key in ("input_ids", "labels", "images", "depths",
                             "poses", "intrinsics", "time_ids", "inflection_weights"))
-        
+
+        # Filter out None values
         input_ids_batch = [x for x in input_ids_batch if x is not None]
         labels_batch = [x for x in labels_batch if x is not None]
         
@@ -1373,20 +1367,25 @@ class DataCollatorForSupervisedDataset(object):
         labels_batch = labels_batch[:, :self.tokenizer.model_max_length]
         attention_mask = input_ids_batch.ne(self.tokenizer.pad_token_id)
         
+        # Process image and depth data
         if image_batch[0] is not None:
+            # Make sure all image tensors share the same length
             img_lens = [img.shape[0] if img is not None else 0 for img in image_batch]
             max_len = max(img_lens) if img_lens else 1
-            
+
+            # Safely pad the image and depth tensors
             padded_images = []
             padded_depths = []
-            
+
             for i, (img, depth) in enumerate(zip(image_batch, depth_batch)):
                 if img is not None and depth is not None:
+                    # Ensure tensor type
                     if not isinstance(img, torch.Tensor):
                         img = torch.tensor(img)
                     if not isinstance(depth, torch.Tensor):
                         depth = torch.tensor(depth)
-                        
+
+                    # Pad to the max length
                     if img.shape[0] < max_len:
                         pad_size = max_len - img.shape[0]
                         img = torch.cat([img, torch.zeros(pad_size, *img.shape[1:], dtype=img.dtype, device=img.device)], dim=0)
@@ -1395,6 +1394,7 @@ class DataCollatorForSupervisedDataset(object):
                     padded_images.append(img)
                     padded_depths.append(depth)
                 else:
+                    # Create a dummy tensor
                     if padded_images:
                         dummy_img = torch.zeros_like(padded_images[0])
                         dummy_depth = torch.zeros_like(padded_depths[0])
@@ -1410,6 +1410,7 @@ class DataCollatorForSupervisedDataset(object):
             image_batch = None
             depth_batch = None
         
+        # Process poses and intrinsics
         if pose_batch[0] is not None:
             padded_poses = []
             padded_intrinsics = []
@@ -1428,6 +1429,7 @@ class DataCollatorForSupervisedDataset(object):
                     padded_poses.append(padded_pose)
                     padded_intrinsics.append(padded_intrinsic)
                 else:
+                    # Create a dummy tensor
                     dummy_pose = torch.eye(4).unsqueeze(0).repeat(max_views, 1, 1)
                     dummy_intrinsic = torch.eye(3).unsqueeze(0).repeat(max_views, 1, 1)
                     padded_poses.append(dummy_pose)
@@ -1439,12 +1441,14 @@ class DataCollatorForSupervisedDataset(object):
             pose_batch = None
             intrinsic_batch = None
         
+        # Build the output batch
         batch = {
             "input_ids": input_ids_batch,
             "labels": labels_batch,
             "attention_mask": attention_mask,
         }
-        
+
+        # Only add non-None fields
         if image_batch is not None:
             batch["images"] = image_batch
         if depth_batch is not None:
@@ -1454,6 +1458,7 @@ class DataCollatorForSupervisedDataset(object):
         if intrinsic_batch is not None:
             batch["intrinsics"] = intrinsic_batch
         
+        # Process time_ids and weights
         if time_ids_batch[0] is not None:
             valid_time_ids = [x for x in time_ids_batch if x is not None]
             if valid_time_ids:
@@ -1531,19 +1536,11 @@ def load_tucker_weights(model, tucker_state_dict):
     
     rank0_print(f"Loaded {len(loaded_keys)} Tucker parameters")
     
-    # Count by parameter type
-    u1_loaded = len([k for k in loaded_keys if '.U1' in k])
-    u2_loaded = len([k for k in loaded_keys if '.U2' in k])
-    u3_loaded = len([k for k in loaded_keys if '.U3' in k])
-    u4_loaded = len([k for k in loaded_keys if '.U4' in k])
-    g_loaded = len([k for k in loaded_keys if '.G' in k])
-    
-    rank0_print(f"  - G: {g_loaded} loaded")
-    rank0_print(f"  - U1: {u1_loaded} loaded")
-    rank0_print(f"  - U2: {u2_loaded} loaded")
-    rank0_print(f"  - U3: {u3_loaded} loaded")
-    rank0_print(f"  - U4: {u4_loaded} loaded")
-    
+    # Count by parameter type (5D Tucker: shared U1/U2, factors U3/U4/U5, core G)
+    for tag in ("G", "U1", "U2", "U3", "U4", "U5"):
+        n = len([k for k in loaded_keys if f'.{tag}' in k])
+        rank0_print(f"  - {tag}: {n} loaded")
+
     if missing_keys:
         rank0_print(f"Missing {len(missing_keys)} parameters (will be initialized)")
         # Only show first few missing keys
@@ -1650,185 +1647,213 @@ def get_model(model_args, training_args, data_args, bnb_model_from_pretrained_ar
                 low_cpu_mem_usage=False,
                 **customized_kwargs,
                 )
+    # Load a pretrained checkpoint before adapter setup (if provided)
     if training_args.pretrained_checkpoint_path:
         rank0_print(f"Loading pretrained checkpoint from {training_args.pretrained_checkpoint_path}")
-        
+
         try:
             checkpoint_path = training_args.pretrained_checkpoint_path
-            
-            tucker_weights_path = os.path.join(checkpoint_path, "tucker_lora", "tucker_lora_weights.bin")
+
+            # First try to find previously-saved TuKA++ adapter weights
+            tucker_weights_path = os.path.join(checkpoint_path, "tucker_5d", "tucker_5d_weights.bin")
             if not os.path.exists(tucker_weights_path):
-                tucker_weights_path = os.path.join(checkpoint_path, "tucker_lora_weights.bin")
-            
+                tucker_weights_path = os.path.join(checkpoint_path, "tucker_5d_weights.bin")
+
             if os.path.exists(tucker_weights_path):
-                rank0_print(f"Found Tucker-LoRA weights at {tucker_weights_path}")
+                rank0_print(f"Found TuKA++ adapter weights at {tucker_weights_path}")
+                # Stash the adapter weights; they are loaded after the adapter is applied
                 tucker_state_dict = torch.load(tucker_weights_path, map_location='cpu')
             else:
                 tucker_state_dict = None
-                rank0_print("No Tucker-LoRA weights found, loading standard checkpoint")
-            
+                rank0_print("No TuKA++ adapter weights found, loading standard checkpoint")
+
+            # Load base model weights (if any)
             base_model_files = glob.glob(os.path.join(checkpoint_path, "pytorch_model*.bin"))
             if not base_model_files:
                 base_model_files = glob.glob(os.path.join(checkpoint_path, "model*.safetensors"))
             
             if base_model_files and not tucker_state_dict:
+                # Only load base weights when there are no adapter weights
                 rank0_print("Loading base model weights...")
-                
+
         except Exception as e:
             rank0_print(f"Warning: Failed to load checkpoint: {e}")
             rank0_print("Continuing with base model...")
     else:
         tucker_state_dict = None
-    
-    #
-    # if training_args.use_lora:
-    #     rank0_print("Setting up explicit LoRA layers...")
-    #     model = apply_lora_to_model(model, training_args)
+
+    # Set up the TuKA++ adapter (wrap the target linear layers first)
     if training_args.use_lora:
-        rank0_print("Setting up explicit LoRA layers...")
+        rank0_print("Setting up TuKA++ adapter layers...")
         model = apply_lora_to_model(model, training_args)
         
+        # Load the previous task's TuKA++ adapter weights (if any)
         if training_args.pretrained_checkpoint_path and training_args.current_task_id > 0:
-            rank0_print(f"Loading Tucker weights from previous task: {training_args.pretrained_checkpoint_path}")
-            
+            rank0_print(f"Loading TuKA++ weights from previous task: {training_args.pretrained_checkpoint_path}")
+
             tucker_weights_path = os.path.join(
-                training_args.pretrained_checkpoint_path, 
-                "tucker_lora", 
-                "tucker_lora_weights.bin"
+                training_args.pretrained_checkpoint_path,
+                "tucker_5d",
+                "tucker_5d_weights.bin"
             )
-            
+
             if os.path.exists(tucker_weights_path):
                 tucker_state_dict = torch.load(tucker_weights_path, map_location='cpu')
-                
+
+                # Load adapter weights into the model
                 incompatible_keys = load_tucker_weights(model, tucker_state_dict)
-                
-                rank0_print(f"Loaded Tucker weights from {tucker_weights_path}")
+
+                rank0_print(f"Loaded TuKA++ weights from {tucker_weights_path}")
                 if incompatible_keys:
                     rank0_print(f"Incompatible keys: {incompatible_keys}")
             else:
-                rank0_print(f"No Tucker weights found at {tucker_weights_path}, starting fresh")
-        
+                rank0_print(f"No TuKA++ weights found at {tucker_weights_path}, starting fresh")
+
+    # If adapter weights were stashed above, load them now
     if 'tucker_state_dict' in locals() and tucker_state_dict is not None:
-        rank0_print("Loading Tucker-LoRA weights...")
-        
+        rank0_print("Loading TuKA++ adapter weights...")
+
+        # Copy adapter weights directly into the matching layers
         missing_keys = []
         loaded_keys = []
         unexpected_keys = []
-        
+
         for name, param in model.named_parameters():
             if name in tucker_state_dict:
+                # Check that shapes match
                 if param.shape != tucker_state_dict[name].shape:
                     rank0_print(f"Warning: Shape mismatch for {name}: "
                             f"model {param.shape} vs checkpoint {tucker_state_dict[name].shape}")
                     continue
-                
+
                 param.data.copy_(tucker_state_dict[name].to(param.device).to(param.dtype))
                 loaded_keys.append(name)
             elif 'lora_layer' in name:
                 missing_keys.append(name)
-        
+
+        # Detect weights in the checkpoint that were not used
         for key in tucker_state_dict.keys():
             if key not in loaded_keys:
                 unexpected_keys.append(key)
-        
-        rank0_print(f"Loaded {len(loaded_keys)} Tucker-LoRA parameters")
+
+        rank0_print(f"Loaded {len(loaded_keys)} TuKA++ parameters")
         if missing_keys:
             rank0_print(f"Missing {len(missing_keys)} parameters (will be initialized):")
-            for key in missing_keys[:5]:
+            for key in missing_keys[:5]:  # only print the first few
                 rank0_print(f"  - {key}")
         if unexpected_keys:
             rank0_print(f"Unexpected {len(unexpected_keys)} keys in checkpoint:")
             for key in unexpected_keys[:5]:
                 rank0_print(f"  - {key}")
-        
+
+        # Sanity-check that the factor experts were loaded correctly
         for name, param in model.named_parameters():
-            if 'lora_layer.U3' in name or 'lora_layer.U4' in name:
+            if any(f'lora_layer.{u}' in name for u in ('U3', 'U4', 'U5')):
                 rank0_print(f"Verified {name}: shape={param.shape}, "
                         f"mean={param.mean().item():.6f}, "
                         f"std={param.std().item():.6f}")
-        
+
         # Count trainable parameters
         trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
         total_params = sum(p.numel() for p in model.parameters())
         rank0_print(f"Trainable params: {trainable_params:,} ({100 * trainable_params/total_params:.2f}%)")
-        
-        rank0_print("LoRA setup completed")
-    
+
+        rank0_print("TuKA++ adapter setup completed")
+
     return model
 
 def apply_lora_to_model(model, training_args):
-    """Wrap the target Linear modules with 5D Tucker-LoRA (TuKA++) adapters.
+    """Wrap the target LLM linear layers with TuKA++ (5D Tucker) adapters.
 
-    Each target Linear is replaced by a Tucker5DLoRALinear whose factors
-    decouple scene / environment / instruction-style knowledge. Base weights
-    stay frozen; only the Tucker factors are trainable.
+    TuKA++ is the only adaptation method supported here. Each adapted layer
+    represents its update as a high-order tensor X^l in R^{a x b x |S| x |E| x |L|}
+    and factorizes it via Tucker decomposition into a shared decoder U1, shared
+    encoder U2, core tensor G, and three factor experts U3 (scene), U4
+    (environment) and U5 (instruction style) (paper Eq. 5-9). The removed
+    branches (plain LoRA, 4th-order TuKA, HydraLoRA / MoE-LoRA) are no longer
+    dispatched.
     """
     import torch.nn as nn
+    from streamvln.model.tucker_5d_lora_layers import Tucker5DLoRALinear
 
-    if getattr(training_args, 'use_tucker_5d', False):
-        from streamvln.model.tucker_5d_lora_layers import Tucker5DLoRALinear
+    if not getattr(training_args, 'use_tucker_5d', False):
+        raise ValueError(
+            "apply_lora_to_model now only supports TuKA++ (use_tucker_5d=True)."
+        )
 
-        target_modules = training_args.lora_target_modules.split(",")
-        tucker_ranks = tuple(int(r) for r in training_args.tucker_ranks_5d.split(','))
-        assert len(tucker_ranks) == 5, f"tucker_ranks_5d must have 5 values, got {tucker_ranks}"
+    target_modules = training_args.lora_target_modules.split(",")
+    tucker_ranks = tuple(int(r) for r in training_args.tucker_ranks_5d.split(','))
+    assert len(tucker_ranks) == 5, f"tucker_ranks_5d must have 5 values, got {tucker_ranks}"
 
-        tucker_config = {
-            'ranks': tucker_ranks,
-            'lora_alpha': training_args.lora_alpha,
-            'lora_dropout': training_args.lora_dropout,
-            'init_std': getattr(training_args, 'tucker_init_scale', 0.02),
-        }
+    tucker_config = {
+        'ranks': tucker_ranks,
+        'lora_alpha': training_args.lora_alpha,
+        'lora_dropout': training_args.lora_dropout,
+        'init_std': getattr(training_args, 'tucker_init_scale', 0.02),
+    }
 
-        model_dtype = next(model.parameters()).dtype
-        rank0_print(f"[5D Tucker-LoRA] Model dtype: {model_dtype}")
+    model_dtype = next(model.parameters()).dtype
+    rank0_print(f"[TuKA++] Model dtype: {model_dtype}")
 
-        model.tucker_5d_layers = {}
-        replaced_modules = []
+    model.tucker_5d_layers = {}
+    replaced_modules = []
 
-        was_training = model.training
-        model.eval()
+    was_training = model.training
+    model.eval()
 
-        for name, module in model.named_modules():
-            if isinstance(module, nn.Linear):
-                if any(target in name for target in target_modules):
-                    *parent_path, layer_name = name.split('.')
-                    parent = model
-                    for p in parent_path:
-                        parent = getattr(parent, p)
+    for name, module in model.named_modules():
+        if isinstance(module, nn.Linear):
+            if any(target in name for target in target_modules):
+                *parent_path, layer_name = name.split('.')
+                parent = model
+                for p in parent_path:
+                    parent = getattr(parent, p)
 
-                    rank0_print(f"[5D] Replacing {name}: in={module.in_features} out={module.out_features}")
-                    tucker_5d = Tucker5DLoRALinear(module, **tucker_config)
-                    # keep the lora-adapter params in the same dtype as the base
-                    tucker_5d.lora_layer.U1.data = tucker_5d.lora_layer.U1.data.to(model_dtype)
-                    tucker_5d.lora_layer.U2.data = tucker_5d.lora_layer.U2.data.to(model_dtype)
-                    tucker_5d.lora_layer.G.data = tucker_5d.lora_layer.G.data.to(model_dtype)
-                    setattr(parent, layer_name, tucker_5d)
-                    model.tucker_5d_layers[name] = tucker_5d.lora_layer
-                    replaced_modules.append(name)
+                rank0_print(f"[TuKA++] Replacing {name}: in={module.in_features} out={module.out_features}")
+                tucker_5d = Tucker5DLoRALinear(module, **tucker_config)
+                # Keep the adapter factors in the same dtype as the base weight
+                tucker_5d.lora_layer.U1.data = tucker_5d.lora_layer.U1.data.to(model_dtype)
+                tucker_5d.lora_layer.U2.data = tucker_5d.lora_layer.U2.data.to(model_dtype)
+                tucker_5d.lora_layer.G.data = tucker_5d.lora_layer.G.data.to(model_dtype)
+                setattr(parent, layer_name, tucker_5d)
+                model.tucker_5d_layers[name] = tucker_5d.lora_layer
+                replaced_modules.append(name)
 
-        if was_training:
-            model.train()
+    if was_training:
+        model.train()
 
-        total_params = sum(p.numel() for p in model.parameters())
-        trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-        rank0_print(f"[5D Tucker-LoRA] Applied to {len(model.tucker_5d_layers)} layers.")
-        rank0_print(f"  - ranks(r1..r5): {tucker_ranks}")
-        rank0_print(f"  - instruction paradigms: VLN / OLN / DUN (default tucker_instr_num={training_args.tucker_instr_num})")
-        rank0_print(f"  - trainable: {trainable_params:,} / total {total_params:,} ({100*trainable_params/total_params:.3f}%)")
-        return model
-
+    total_params = sum(p.numel() for p in model.parameters())
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    rank0_print(f"[TuKA++] Applied 5D Tucker adapters to {len(model.tucker_5d_layers)} layers.")
+    rank0_print(f"  - initial ranks (r1..r5): {tucker_ranks}")
+    rank0_print(f"  - instruction styles: VLN / OLN / DUN (tucker_instr_num={training_args.tucker_instr_num})")
+    rank0_print(f"  - trainable: {trainable_params:,} / total {total_params:,} ({100*trainable_params/total_params:.3f}%)")
     return model
 
+
+
+# =========================================================================
+# TuKA++ (5D Tucker) MFLEN continual learning:
+#   * Factor-wise Knowledge Inheritance and Exploration (FKIE) losses, and
+#   * Progressively Expandable Shared Tucker Subspace (PESTS) with dynamic
+#     zero-padding, which keeps previously learned adapters invariant under
+#     expansion (paper Proposition 1).
+# =========================================================================
 def train_with_continual_learning_5d(trainer, training_args, data_module):
     """
-    Continual learning for 5D Tucker-LoRA using Progressive Shared-Subspace
-    Expansion + Zero-Padding (Theorem 1 in TuKA extension paper).
+    Continual learning for the TuKA++ 5D Tucker adapter under the MFLEN setting.
+
+    The shared Tucker subspace {U1, U2, G} grows via PESTS when a new factor
+    category appears, and previously observed factor experts are zero-padded so
+    that old-task adapters are preserved (paper Proposition 1). The FKIE losses
+    (orthogonality / consistency / Fisher-aware) regularize factor experts and
+    the shared subspace.
 
     The (scene, env, instr) triple for the CURRENT task is given via
-      training_args.current_scene_idx / current_env_idx / current_instr_idx.
-    No inference / CLIP-style routing is used.
+      training_args.current_scene_idx / current_env_idx / current_instr_idx,
+    since factor indices are available during training (paper Sec. 3).
     """
-    from streamvln.model.continual_learning_5d import TaskExpansionManager
+    from streamvln.model.continual_learning_5d import TaskExpansionManager, TuKARegularizer
     from streamvln.model.tucker_5d_lora_layers import (
         Tucker5DLoRALinear, Tucker5DLoRALayer,
         zero_inactive_gradients_all, enforce_zero_pad_all,
@@ -1866,6 +1891,34 @@ def train_with_continual_learning_5d(trainer, training_args, data_module):
     )
     trainer.model.set_tucker5d_route(s_row, e_row, p_row)
 
+    # FKIE regularizer (consistency + orthogonality + Fisher-aware losses).
+    # Anchor the shared subspace at the start of THIS task, add the reg term to
+    # the training loss, and update the smoothed Fisher after each backward.
+    tuka_reg = TuKARegularizer(
+        trainer.model,
+        lambda_c=getattr(training_args, "tucker_lambda_c", 1.0),
+        lambda_o=getattr(training_args, "tucker_lambda_o", 0.1),
+        lambda_f=getattr(training_args, "tucker_lambda_f", 0.01),
+        fisher_omega=getattr(training_args, "tucker_fisher_omega", 0.9),
+    )
+    # delta_exp for this task (paper Eq. 15/27): if the subspace expanded, the
+    # loss uses orthogonality (exploration); otherwise Fisher + consistency
+    # (inheritance).
+    tuka_reg.set_expanded(mgr.last_expanded)
+    if training_args.local_rank in (-1, 0):
+        rank0_print(f"[TuKA++] FKIE losses: lambda_c={tuka_reg.lambda_c} "
+                    f"lambda_o={tuka_reg.lambda_o} lambda_f={tuka_reg.lambda_f} "
+                    f"omega={tuka_reg.omega}  delta_exp={int(tuka_reg.expanded)}")
+
+    # Wrap the trainer's loss so the FKIE regularization is added to the task loss.
+    _orig_compute_loss = trainer.compute_loss
+    def _compute_loss_with_reg(model, inputs, return_outputs=False, **kw):
+        out = _orig_compute_loss(model, inputs, return_outputs=True, **kw)
+        loss, outputs = out if isinstance(out, tuple) else (out, None)
+        loss = loss + tuka_reg.regularization()
+        return (loss, outputs) if return_outputs else loss
+    trainer.compute_loss = _compute_loss_with_reg
+
     # Ensure the optimizer is rebuilt to include any freshly-appended params
     # (nn.Parameter replacement through expand() leaves trainer.optimizer
     # referencing stale tensors if it was built already). Our expansion runs
@@ -1878,6 +1931,9 @@ def train_with_continual_learning_5d(trainer, training_args, data_module):
             self.model = model
 
         def on_before_optimizer_step(self, args, state, control, **kwargs):
+            # Update the smoothed Fisher from the (unmasked) grads first, then
+            # mask inactive gradients so only the active adapter blocks update.
+            tuka_reg.update_fisher()
             zero_inactive_gradients_all(self.model)
             return control
 
@@ -2224,21 +2280,25 @@ def train(attn_implementation=None):
             #             param.requires_grad_(True)
             if "mm_language_model" in tunable_parts:
                 if training_args.use_lora:
-                    rank0_print("Using LoRA for language model fine-tuning - "
-                                "keeping base weights frozen, re-enabling LoRA adapters")
+                    # With TuKA++ the frozen LLM backbone stays frozen. The
+                    # earlier model.requires_grad_(False) cleared the adapter
+                    # factors that apply_lora_to_model had unfrozen, so re-enable
+                    # them here -- otherwise the optimizer sees no trainable
+                    # adapter parameter and the run becomes a no-op fine-tune.
+                    rank0_print("Using TuKA++ for language-model adaptation - "
+                                "keeping base weights frozen, re-enabling adapter factors")
                     n_unfrozen = 0
                     for pname, p in model.named_parameters():
                         if any(tag in pname for tag in (
-                                # plain LoRA
-                                'lora_layer.lora_A', 'lora_layer.lora_B',
-                                # 4D / 5D Tucker-LoRA factor matrices and core tensor
+                                # TuKA++ 5D Tucker factor matrices and core tensor
                                 'lora_layer.U1', 'lora_layer.U2', 'lora_layer.U3',
                                 'lora_layer.U4', 'lora_layer.U5', 'lora_layer.G',
                         )):
                             p.requires_grad = True
                             n_unfrozen += 1
-                    rank0_print(f"  -> re-enabled {n_unfrozen} LoRA / Tucker parameters")
+                    rank0_print(f"  -> re-enabled {n_unfrozen} TuKA++ adapter parameters")
                 else:
+                    # Full-parameter fine-tuning of the language model
                     rank0_print("Full parameter fine-tuning for language model")
                     for name, param in model.named_parameters():
                         if "vision_tower" not in name and "mm_projector" not in name and "vision_resampler" not in name:
@@ -2251,40 +2311,33 @@ def train(attn_implementation=None):
 
         # ----------------------------------------------------------------
         # Defensive net: regardless of which tunable_parts string the user
-        # gave, if --use_lora is on, LoRA / Tucker adapters MUST be trainable.
-        # This catches the case where mm_tunable_parts omits 'mm_language_model'
-        # entirely, or where someone adds a new dispatch branch above and
-        # forgets to re-enable adapters after model.requires_grad_(False).
+        # gave, if --use_lora is on the TuKA++ adapter factors MUST be
+        # trainable. This catches the case where mm_tunable_parts omits
+        # 'mm_language_model', or where a freeze step above accidentally
+        # clobbers the adapters after model.requires_grad_(False).
         # ----------------------------------------------------------------
         if training_args.use_lora:
             n_unfrozen = 0
             for pname, p in model.named_parameters():
-                if any(tag in pname for tag in (
-                        'lora_layer.lora_A', 'lora_layer.lora_B',
-                        'lora_layer.U1', 'lora_layer.U2', 'lora_layer.U3',
-                        'lora_layer.U4', 'lora_layer.U5', 'lora_layer.G',
-                )):
+                if any(f'lora_layer.{u}' in pname for u in ('U1', 'U2', 'U3', 'U4', 'U5', 'G')):
                     if not p.requires_grad:
                         p.requires_grad = True
                         n_unfrozen += 1
             if n_unfrozen > 0:
-                rank0_print(f"[LoRA defensive] re-enabled {n_unfrozen} adapter "
+                rank0_print(f"[TuKA++ defensive] re-enabled {n_unfrozen} adapter "
                             f"parameters that had been clobbered to False.")
-            # Loud assertion: at least ONE LoRA / Tucker param must end up trainable.
+            # Loud assertion: at least ONE TuKA++ factor must end up trainable.
             n_trainable_lora = sum(
                 1 for pname, p in model.named_parameters()
-                if p.requires_grad and (
-                    'lora_layer.lora_A' in pname or 'lora_layer.lora_B' in pname or
-                    any(f'lora_layer.{u}' in pname for u in ('U1','U2','U3','U4','U5','G'))
-                )
+                if p.requires_grad and any(f'lora_layer.{u}' in pname for u in ('U1', 'U2', 'U3', 'U4', 'U5', 'G'))
             )
             assert n_trainable_lora > 0, (
-                "use_lora=True but NO LoRA / Tucker parameter is trainable. "
+                "use_lora=True but NO TuKA++ adapter parameter is trainable. "
                 "Optimizer would silently skip the adapter and the run would "
                 "produce a no-op fine-tune. Check apply_lora_to_model and the "
                 "mm_tunable_parts freeze block above."
             )
-            rank0_print(f"[LoRA sanity] {n_trainable_lora} adapter parameters are trainable.")
+            rank0_print(f"[TuKA++ sanity] {n_trainable_lora} adapter parameters are trainable.")
         
         for name, param in model.named_parameters():
             if param.requires_grad:  # Check if the parameter requires training
@@ -2367,22 +2420,25 @@ def train(attn_implementation=None):
     # print(list(model.get_model().vision_resampler.parameters())[0])
     # import ipdb; ipdb.set_trace()
 
+    # After building the trainer, dispatch to the MFLEN continual-learning loop
     if training_args.continual_learning and getattr(training_args, 'use_tucker_5d', False):
         rank0_print("=" * 50)
-        rank0_print("Starting Continual Learning with 5D Tucker-LoRA (expansion + zero-pad)")
+        rank0_print("Starting MFLEN continual learning with TuKA++ (5D Tucker, PESTS + FKIE)")
         rank0_print(f"Task ID: {training_args.current_task_id}")
         rank0_print(f"Total Tasks: {training_args.num_tasks}")
         rank0_print(f"Triple: scene={training_args.current_scene_idx} "
                     f"env={training_args.current_env_idx} "
                     f"instr={training_args.current_instr_idx}")
         rank0_print("=" * 50)
+        # Resume from the previous task's latest snapshot (if any)
         tucker_5d_dir = training_args.tucker_5d_dir or os.path.join(training_args.output_dir, "tucker_5d")
         latest_snap = os.path.join(tucker_5d_dir, "tucker5d_latest.pt")
         if os.path.exists(latest_snap) and training_args.current_task_id > 0:
             loaded, _mgr_state = load_tucker5d_snapshot(trainer.model, latest_snap)
-            rank0_print(f"[TuKA-5D] Resumed {loaded} layers from {latest_snap}")
+            rank0_print(f"[TuKA++] Resumed {loaded} layers from {latest_snap}")
         trainer = train_with_continual_learning_5d(trainer, training_args, data_module)
     else:
+        # Standard (non-continual) training
         if list(pathlib.Path(training_args.output_dir).glob("checkpoint-*")):
             trainer.train(resume_from_checkpoint=True)
         else:
@@ -2392,23 +2448,12 @@ def train(attn_implementation=None):
 
     model.config.use_cache = True
 
-    if training_args.lora_enable:
-        # import ipdb; ipdb.set_trace()
-        state_dict = get_peft_state_maybe_zero_3(model.named_parameters(), training_args.lora_bias)
-        non_lora_state_dict = get_peft_state_non_lora_maybe_zero_3(model.named_parameters())
-        if training_args.local_rank == 0 or training_args.local_rank == -1:
-            if hasattr(model, "config"):
-                model.config.save_pretrained(training_args.output_dir)
-            if hasattr(model, "generation_config"):
-                model.generation_config.save_pretrained(training_args.output_dir)
-            model.save_pretrained(training_args.output_dir, state_dict=state_dict)
-            torch.save(non_lora_state_dict, os.path.join(training_args.output_dir, "non_lora_trainables.bin"))
+    # Save the TuKA++ adapter weights (safe_save_model_for_hf_trainer handles the
+    # use_lora branch and writes only the 5D Tucker factors).
+    if training_args.fsdp:
+        safe_save_model_for_hf_trainer_fsdp(trainer=trainer, output_dir=training_args.output_dir, model_args=model_args)
     else:
-        # safe_save_model_for_hf_trainer(trainer=trainer, output_dir=training_args.output_dir)
-        if training_args.fsdp:
-            safe_save_model_for_hf_trainer_fsdp(trainer=trainer, output_dir=training_args.output_dir, model_args=model_args)
-        else:
-            safe_save_model_for_hf_trainer(trainer=trainer, output_dir=training_args.output_dir, model_args=model_args)
+        safe_save_model_for_hf_trainer(trainer=trainer, output_dir=training_args.output_dir, model_args=model_args)
 
     rank0_print(f"Model saved to {training_args.output_dir}")
 

@@ -155,6 +155,7 @@ class TaskExpansionManager:
             self._sync_state_from_model()
 
         self._current_triple: Optional[Tuple[int, int, int]] = None
+        self.last_expanded: bool = False   # delta_exp of the most recent begin_task
 
     # -- persistence -------------------------------------------------------
 
@@ -203,6 +204,8 @@ class TaskExpansionManager:
         instr_new = instr_idx not in self.state.instr_row
 
         need_expand = scene_new or env_new or instr_new
+        # delta_exp (paper Eq. 15): whether this task expands the shared subspace.
+        self.last_expanded = need_expand
 
         if need_expand and self.expand_on_any_new:
             expand_all(
@@ -288,3 +291,126 @@ class TaskExpansionManager:
             if p.requires_grad:
                 n += p.numel()
         return n
+
+
+# ---------------------------------------------------------------------------
+# TuKA++ Factor-wise Knowledge Inheritance and Exploration (FKIE) regularizer.
+#
+# It implements the three FKIE losses and gates them exactly as in the paper's
+# overall objective (Eq. 27):
+#
+#     L_t = L_nav + delta_exp * L_orth + (1 - delta_exp) * (L_Fish + L_con)
+#
+# where delta_exp = 1 when the current task introduces a NEW factor category
+# (exploration -> orthogonality separates the new expert), and delta_exp = 0
+# when the task is a new composition of already-seen factors (inheritance ->
+# consistency + Fisher-aware regularization stabilize the reused knowledge).
+#
+# Wire regularization() into the training loss, call update_fisher() after
+# loss.backward() and before optimizer.step(), and set_expanded() per task.
+# ---------------------------------------------------------------------------
+class TuKARegularizer:
+    """
+    FKIE losses (paper Eq. 13 / 14 / 18):
+      * L_orth : orthogonality among the factor experts U3/U4/U5, encouraging
+                 decoupled scene / environment / instruction-style knowledge,
+                 i.e. || Norm(U_k) Norm(U_k)^T - I ||_F^2 over the existing rows
+                 (Eq. 13). Applied when a new factor category appears.
+      * L_con  : consistency of the reused factor experts U3/U4/U5 with their
+                 value at the start of the current task (Eq. 14), so inherited
+                 factor knowledge is only refined, not overwritten.
+      * L_Fish : Fisher-aware penalty on the shared subspace {U1, U2, G},
+                 sum_i F_i (theta_i - theta_i^old)^2 with a smoothed Fisher
+                 F <- omega*F + (1-omega)*grad^2 (Eq. 16-18).
+
+    The gate delta_exp (whether the task expanded the subspace) is provided via
+    set_expanded(); it selects the paper's per-task loss combination (Eq. 27).
+    """
+
+    _SHARED_TAGS = ("lora_layer.U1", "lora_layer.U2", "lora_layer.G")
+    _FACTOR_TAGS = ("lora_layer.U3", "lora_layer.U4", "lora_layer.U5")
+
+    def __init__(self, model, lambda_c=1.0, lambda_o=0.1, lambda_f=0.01, fisher_omega=0.9):
+        self.model = model
+        self.lambda_c = float(lambda_c)
+        self.lambda_o = float(lambda_o)
+        self.lambda_f = float(lambda_f)
+        self.omega = float(fisher_omega)
+        self.expanded = True          # delta_exp for the current task (Eq. 15)
+        self._anchor: Dict[str, torch.Tensor] = {}   # theta at task start
+        self._fisher: Dict[str, torch.Tensor] = {}    # smoothed Fisher (shared)
+        self.snapshot()
+
+    def set_expanded(self, expanded: bool):
+        """Set delta_exp for the current task (True iff a new factor appeared)."""
+        self.expanded = bool(expanded)
+
+    def _shared_params(self):
+        for name, p in self.model.named_parameters():
+            if p.requires_grad and any(t in name for t in self._SHARED_TAGS):
+                yield name, p
+
+    def _factor_params(self):
+        for name, p in self.model.named_parameters():
+            if p.requires_grad and any(t in name for t in self._FACTOR_TAGS):
+                yield name, p
+
+    def snapshot(self):
+        """Anchor shared subspace + factor experts at the start of a task."""
+        self._anchor = {
+            n: p.detach().clone()
+            for n, p in list(self._shared_params()) + list(self._factor_params())
+        }
+
+    def orthogonality_loss(self):
+        # Eq. 13: separate factor experts using row-normalized Gram matrices.
+        loss = None
+        for layer in iter_tucker5d_layers(self.model):
+            for U in (layer.U3, layer.U4, layer.U5):
+                if U.shape[0] > 1:
+                    U_norm = U / (U.norm(dim=1, keepdim=True) + 1e-8)
+                    G = U_norm @ U_norm.t()
+                    I = torch.eye(G.shape[0], device=G.device, dtype=G.dtype)
+                    term = ((G - I) ** 2).sum()
+                    loss = term if loss is None else loss + term
+        return loss if loss is not None else torch.zeros((), device=next(self.model.parameters()).device)
+
+    def consistency_loss(self):
+        # Eq. 14: keep reused factor experts close to their pre-task value.
+        loss = None
+        for name, p in self._factor_params():
+            a = self._anchor.get(name)
+            if a is not None and a.shape == p.shape:
+                term = ((p - a) ** 2).sum()
+                loss = term if loss is None else loss + term
+        return loss if loss is not None else torch.zeros((), device=next(self.model.parameters()).device)
+
+    def fisher_loss(self):
+        # Eq. 18: Fisher-aware penalty on the shared subspace {U1, U2, G}.
+        loss = None
+        for name, p in self._shared_params():
+            f = self._fisher.get(name); a = self._anchor.get(name)
+            if f is not None and a is not None and f.shape == p.shape:
+                term = (f * (p - a) ** 2).sum()
+                loss = term if loss is None else loss + term
+        return loss if loss is not None else torch.zeros((), device=next(self.model.parameters()).device)
+
+    @torch.no_grad()
+    def update_fisher(self):
+        """Smoothed Fisher from squared grads; call after backward(), before step()."""
+        for name, p in self._shared_params():
+            if p.grad is None:
+                continue
+            g2 = p.grad.detach() ** 2
+            prev = self._fisher.get(name)
+            self._fisher[name] = g2 if prev is None or prev.shape != g2.shape \
+                else self.omega * prev + (1.0 - self.omega) * g2
+
+    def regularization(self):
+        # Paper Eq. 27:
+        #   delta_exp == 1 -> orthogonality drives exploration of the new factor
+        #   delta_exp == 0 -> Fisher + consistency inherit reused knowledge
+        if self.expanded:
+            return self.lambda_o * self.orthogonality_loss()
+        return (self.lambda_c * self.consistency_loss()
+                + self.lambda_f * self.fisher_loss())
